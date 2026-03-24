@@ -33,13 +33,16 @@ for _, row in df.iterrows():
             continue
 
         masks = r.masks.data.cpu().numpy()
+        classes = r.boxes.cls.cpu().numpy()
 
-        for m in masks:
+        for i, m in enumerate(masks):
             mask = (m > 0.5).astype(np.uint8)
+
+            class_id = int(classes[i])
+            class_name = model.names[class_id].lower()
 
             # ----- FEATURES -----
             mask_area = np.sum(mask)
-
             img_area = mask.shape[0] * mask.shape[1]
             normalized_area = mask_area / img_area
 
@@ -68,6 +71,7 @@ for _, row in df.iterrows():
 
             data.append({
                 "image_name": img_name,
+                "food": class_name,   # 🔥 IMPORTANT
                 "width": width,
                 "height": height,
                 "bbox_area": bbox_area,
