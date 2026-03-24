@@ -13,7 +13,7 @@ model_columns = joblib.load("model_columns.pkl")  # 🔥 load columns
 nutrition_df = pd.read_csv("nutrition.csv")
 calorie_dict = dict(zip(nutrition_df["food"], nutrition_df["kcal_per_100g"]))
 
-img_path = "test_images/test_50.jpg"
+img_path = "test_images/test7_90.jpg"
 
 results = model_det(img_path, conf=0.2)
 
