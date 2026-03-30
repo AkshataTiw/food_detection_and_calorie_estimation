@@ -27,7 +27,7 @@ count_dict = dict(zip(count_df["food"], count_df["weight_per_item"]))
 # =========================
 # TEST IMAGE PATH
 # =========================
-img_path = "test_images/eggs.jpg"
+img_path = "test_images/test_image_18.jpg"
 
 # =========================
 # RUN YOLO
