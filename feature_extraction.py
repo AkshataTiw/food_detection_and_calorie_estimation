@@ -7,7 +7,7 @@ from skimage.measure import label, regionprops
 # =========================
 # LOAD MODEL
 # =========================
-model = YOLO("best.pt")
+model = YOLO("best_new.pt")
 
 # =========================
 # PATHS
