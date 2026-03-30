@@ -6,6 +6,11 @@ from ultralytics import YOLO
 from skimage.measure import label, regionprops
 
 # =========================
+# SETTINGS
+# =========================
+CONF_THRESHOLD = 0.5   # 🔥 IMPORTANT FIX
+
+# =========================
 # LOAD DETECTION MODEL
 # =========================
 model_det = YOLO("best.pt")
@@ -27,12 +32,12 @@ count_dict = dict(zip(count_df["food"], count_df["weight_per_item"]))
 # =========================
 # TEST IMAGE PATH
 # =========================
-img_path = "test_images/test_image_18.jpg"
+img_path = "test_images/test17.jpeg"
 
 # =========================
 # RUN YOLO
 # =========================
-results = model_det(img_path, conf=0.2)
+results = model_det(img_path, conf=CONF_THRESHOLD)
 
 total_calories = 0
 
@@ -43,30 +48,39 @@ for r in results:
 
     masks = r.masks.data.cpu().numpy()
     classes = r.boxes.cls.cpu().numpy()
+    confs = r.boxes.conf.cpu().numpy()   # 🔥 GET CONFIDENCE
 
-    # ✅ Track processed classes (avoid duplicates)
     processed_classes = set()
 
     for i, m in enumerate(masks):
 
+        conf = confs[i]
+
+        # 🔥 FILTER LOW CONFIDENCE (MAIN FIX)
+        if conf < CONF_THRESHOLD:
+            continue
+
         class_id = int(classes[i])
         class_name = model_det.names[class_id].lower().strip()
 
-        # 🚫 Skip if already processed
+        # 🚫 Skip duplicates
         if class_name in processed_classes:
             continue
 
         processed_classes.add(class_name)
 
-        print(f"\nDetected: {class_name}")
+        print(f"\nDetected: {class_name} (conf: {round(conf,2)})")
 
         # =========================
-        # ✅ COUNT-BASED LOGIC
+        # COUNT-BASED LOGIC
         # =========================
         if class_name in count_dict:
-            count = np.sum(classes == class_id)
-            weight_per_item = count_dict[class_name]
 
+            # 🔥 Count only HIGH confidence detections
+            valid_idx = (classes == class_id) & (confs >= CONF_THRESHOLD)
+            count = np.sum(valid_idx)
+
+            weight_per_item = count_dict[class_name]
             pred_weight = count * weight_per_item
 
             print("Count detected:", count)
@@ -74,7 +88,7 @@ for r in results:
 
         else:
             # =========================
-            # ✅ REGRESSION LOGIC (use first mask only)
+            # REGRESSION LOGIC
             # =========================
             mask = (m > 0.5).astype(np.uint8)
 

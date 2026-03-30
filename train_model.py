@@ -14,7 +14,7 @@ for food in foods:
     print(f"\n===== Training model for {food} =====")
     df_food = df[df["food"] == food].copy()
 
-    if len(df_food) < 10:
+    if len(df_food) < 3:
         print("⚠ Not enough data, skipping")
         continue
 
