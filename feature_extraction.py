@@ -37,7 +37,7 @@ for _, row in df.iterrows():
 
         masks = r.masks.data.cpu().numpy()
 
-        # 🔥 IMPORTANT: take LARGEST mask only (fix multi-object noise)
+        # ✅ TAKE LARGEST OBJECT ONLY
         areas = [np.sum(m > 0.5) for m in masks]
         if len(areas) == 0:
             continue
@@ -48,15 +48,17 @@ for _, row in df.iterrows():
         if len(x_idx) == 0:
             continue
 
+        # ✅ CROP
         x_min, x_max = x_idx.min(), x_idx.max()
         y_min, y_max = y_idx.min(), y_idx.max()
-        mask_crop = mask[y_min:y_max+1, x_min:x_max+1]
+        mask = mask[y_min:y_max+1, x_min:x_max+1]
 
-        mask_area = np.sum(mask_crop)
+        mask_area = np.sum(mask)
+        height, width = mask.shape
+        bbox_area = width * height
 
-        labeled = label(mask_crop)
+        labeled = label(mask)
         regions = regionprops(labeled)
-
         if len(regions) == 0:
             continue
 
@@ -64,62 +66,57 @@ for _, row in df.iterrows():
 
         perimeter = region.perimeter
         convex_area = region.convex_area
-
-        width = mask_crop.shape[1]
-        height = mask_crop.shape[0]
+        major_axis = region.major_axis_length
+        minor_axis = region.minor_axis_length
 
         # =========================
-        # 🔥 NEW ROBUST FEATURES
+        # 🔥 FINAL FEATURES
         # =========================
 
-        area = mask_area
+        area_ratio = mask_area / (bbox_area + 1e-6)
         aspect_ratio = width / (height + 1e-6)
-
-        extent = area / (width * height + 1e-6)
-        solidity = area / (convex_area + 1e-6)
+        solidity = mask_area / (convex_area + 1e-6)
         eccentricity = region.eccentricity
 
-        # 🔥 KEY FIX: Equivalent diameter (stable volume base)
-        equiv_diameter = np.sqrt(4 * area / np.pi)
+        equiv_diameter = np.sqrt(4 * mask_area / np.pi)
 
-        # 🔥 TRUE VOLUME PROXY (major fix)
-        volume_proxy = equiv_diameter ** 3
+        thickness = mask_area / (bbox_area + 1e-6)
+        volume_proxy = (equiv_diameter ** 2) * thickness
 
-        # 🔥 THICKNESS (bbox based, NOT perimeter)
-        thickness_proxy = area / (width * height + 1e-6)
+        roundness = (4 * np.pi * mask_area) / (perimeter**2 + 1e-6)
+        compactness = (perimeter**2) / (mask_area + 1e-6)
 
-        # 🔥 ROUNDNESS
-        roundness = (4 * np.pi * area) / (perimeter**2 + 1e-6)
-
-        # 🔥 INTERACTIONS (VERY IMPORTANT)
-        area_x_solidity = area * solidity
-        area_x_thickness = area * thickness_proxy
+        elongation = major_axis / (minor_axis + 1e-6)
+        fill_ratio = mask_area / (convex_area + 1e-6)
 
         data.append({
             "food": food_class,
 
-            "area": area,
+            "area_ratio": area_ratio,
             "aspect_ratio": aspect_ratio,
-            "extent": extent,
             "solidity": solidity,
             "eccentricity": eccentricity,
 
             "equiv_diameter": equiv_diameter,
+            "thickness": thickness,
             "volume_proxy": volume_proxy,
-            "thickness_proxy": thickness_proxy,
-            "roundness": roundness,
 
-            "area_x_solidity": area_x_solidity,
-            "area_x_thickness": area_x_thickness,
+            "roundness": roundness,
+            "compactness": compactness,
+            "elongation": elongation,
+            "fill_ratio": fill_ratio,
 
             "weight": weight
         })
 
 df_out = pd.DataFrame(data)
 
-# 🔥 LOG TARGET (CRITICAL FIX)
+# ✅ CLEAN OUTLIERS
+df_out = df_out[(df_out["weight"] > 5) & (df_out["weight"] < 500)]
+
+# ✅ LOG TARGET
 df_out["log_weight"] = np.log(df_out["weight"] + 1)
 
 df_out.to_csv("features.csv", index=False)
 
-print("✅ features.csv ready (FIXED)")
+print("✅ FINAL features.csv ready")

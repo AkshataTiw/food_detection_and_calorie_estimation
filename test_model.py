@@ -4,29 +4,34 @@ import numpy as np
 import pandas as pd
 from ultralytics import YOLO
 from skimage.measure import label, regionprops
-import warnings
 
+import warnings
 warnings.filterwarnings("ignore")
 
-# =========================
-# LOAD MODELS
-# =========================
 model_det = YOLO("best_new.pt")
+
+calib_df = pd.read_csv("calibration.csv")
 
 nutrition_df = pd.read_csv("nutrition.csv")
 nutrition_df["food"] = nutrition_df["food"].str.lower().str.strip()
 calorie_dict = dict(zip(nutrition_df["food"], nutrition_df["kcal_per_100g"]))
 
-img_path = "test_images/test27.jpeg"
+img_path = "test_images2/test11_a100_po145.jpeg"
 
-results = model_det(img_path, conf=0.25, verbose=False)
+results = model_det(img_path, conf=0.25)
 
 total_calories = 0
-results_list = []
 
-# =========================
-# PROCESS DETECTIONS
-# =========================
+print("\n🍽️ Food Prediction Summary")
+print("=" * 60)
+
+# Table Header
+print(f"{'S.No':<6}{'Item':<15}{'Weight (g)':>15}{'Calories (kcal)':>20}")
+print("-" * 60)
+
+rows = []
+count = 1
+
 for r in results:
     if r.masks is None:
         continue
@@ -34,41 +39,24 @@ for r in results:
     masks = r.masks.data.cpu().numpy()
     classes = r.boxes.cls.cpu().numpy()
 
-    num_objects = len(masks)  # for multi-object correction
+    for i in range(len(masks)):
 
-    for i, m in enumerate(masks):
-
-        mask = (m > 0.5).astype(np.uint8)
+        mask = (masks[i] > 0.5).astype(np.uint8)
 
         y_idx, x_idx = np.where(mask)
         if len(x_idx) == 0:
             continue
 
-        class_id = int(classes[i])
-        class_name = model_det.names[class_id].lower().strip()
-
-        model_path = f"models/model_{class_name}.pkl"
-        cols_path = f"models/columns_{class_name}.pkl"
-
-        if not os.path.exists(model_path):
-            print(f"⚠ No model for {class_name}")
-            continue
-
-        model_reg = joblib.load(model_path)
-        model_columns = joblib.load(cols_path)
-
-        # =========================
-        # CROP MASK
-        # =========================
         x_min, x_max = x_idx.min(), x_idx.max()
         y_min, y_max = y_idx.min(), y_idx.max()
-        mask_crop = mask[y_min:y_max+1, x_min:x_max+1]
+        mask = mask[y_min:y_max+1, x_min:x_max+1]
 
-        mask_area = np.sum(mask_crop)
+        mask_area = np.sum(mask)
+        height, width = mask.shape
+        bbox_area = width * height
 
-        labeled = label(mask_crop)
+        labeled = label(mask)
         regions = regionprops(labeled)
-
         if len(regions) == 0:
             continue
 
@@ -76,100 +64,69 @@ for r in results:
 
         perimeter = region.perimeter
         convex_area = region.area_convex
+        major_axis = region.axis_major_length
+        minor_axis = region.axis_minor_length
 
-        width = mask_crop.shape[1]
-        height = mask_crop.shape[0]
+        food = model_det.names[int(classes[i])].lower().strip()
 
-        # =========================
-        # FEATURE EXTRACTION (MATCH TRAINING)
-        # =========================
-        area = mask_area
+        xgb = joblib.load(f"models/xgb_{food}.pkl")
+        rf = joblib.load(f"models/rf_{food}.pkl")
+        cols = joblib.load(f"models/cols_{food}.pkl")
+
+        # FEATURES (unchanged)
+        area_ratio = mask_area / (bbox_area + 1e-6)
         aspect_ratio = width / (height + 1e-6)
-
-        extent = area / (width * height + 1e-6)
-        solidity = area / (convex_area + 1e-6)
+        solidity = mask_area / (convex_area + 1e-6)
         eccentricity = region.eccentricity
 
-        equiv_diameter = np.sqrt(4 * area / np.pi)
-        volume_proxy = equiv_diameter ** 3
+        equiv_diameter = np.sqrt(4 * mask_area / np.pi)
+        thickness = mask_area / (bbox_area + 1e-6)
+        volume_proxy = (equiv_diameter ** 2) * thickness
 
-        thickness_proxy = area / (width * height + 1e-6)
+        roundness = (4 * np.pi * mask_area) / (perimeter**2 + 1e-6)
+        compactness = (perimeter**2) / (mask_area + 1e-6)
 
-        roundness = (4 * np.pi * area) / (perimeter**2 + 1e-6)
+        elongation = major_axis / (minor_axis + 1e-6)
+        fill_ratio = mask_area / (convex_area + 1e-6)
 
-        area_x_solidity = area * solidity
-        area_x_thickness = area * thickness_proxy
-
-        # =========================
-        # CREATE FEATURE DF
-        # =========================
         features = pd.DataFrame([{
-            "area": area,
+            "area_ratio": area_ratio,
             "aspect_ratio": aspect_ratio,
-            "extent": extent,
             "solidity": solidity,
             "eccentricity": eccentricity,
             "equiv_diameter": equiv_diameter,
+            "thickness": thickness,
             "volume_proxy": volume_proxy,
-            "thickness_proxy": thickness_proxy,
             "roundness": roundness,
-            "area_x_solidity": area_x_solidity,
-            "area_x_thickness": area_x_thickness
-        }])
+            "compactness": compactness,
+            "elongation": elongation,
+            "fill_ratio": fill_ratio
+        }])[cols]
 
-        features = features[model_columns]
+        pred_xgb = np.exp(xgb.predict(features)[0]) - 1
+        pred_rf = np.exp(rf.predict(features)[0]) - 1
 
-        # =========================
-        # PREDICT (LOG → NORMAL)
-        # =========================
-        pred_log = model_reg.predict(features)[0]
-        pred_weight = np.exp(pred_log) - 1
+        pred = 0.5 * pred_xgb + 0.5 * pred_rf
 
-        # =========================
-        # MULTI-OBJECT CORRECTION
-        # =========================
-        if num_objects > 1:
-            pred_weight *= (1 + 0.08 * (num_objects - 1))
+        # CALIBRATION
+        row = calib_df[calib_df["food"] == food]
+        if len(row) > 0:
+            pred = row["a"].values[0] * pred + row["b"].values[0]
 
-        # =========================
-        # STABILITY CLAMP
-        # =========================
-        pred_weight = np.clip(pred_weight, 10, 500)
+        kcal = (pred / 100) * calorie_dict.get(food, 0)
+        total_calories += kcal
 
-        # =========================
-        # CALORIE CALCULATION
-        # =========================
-        kcal = 0
-        if class_name in calorie_dict:
-            kcal = (pred_weight / 100) * calorie_dict[class_name]
-            total_calories += kcal
+        rows.append((count, food, pred, kcal))
+        count += 1
 
-        results_list.append({
-            "item": class_name,
-            "weight": round(pred_weight, 2),
-            "calories": round(kcal, 2)
-        })
 
-# =========================
-# SORT (OPTIONAL CLEANNESS)
-# =========================
-results_list = sorted(results_list, key=lambda x: x["item"])
+# 🔥 PRINT TABLE ROWS
+for row in rows:
+    print(f"{row[0]:<6}{row[1]:<15}{row[2]:>15.2f}{row[3]:>20.2f}")
 
-# =========================
-# CLEAN OUTPUT (IMPROVED FORMAT ONLY)
-# =========================
-print("\n🍽️ Food Prediction Summary")
-print("-" * 50)
+print("-" * 60)
 
-# Header
-print(f"{'Item':<12} {'Weight(g)':>12} {'Calories (kcal)':>18}")
-print("-" * 50)
+# 🔥 TOTAL ROW
+print(f"{'TOTAL':<21}{'':>15}{total_calories:>20.2f}")
 
-# Rows
-for r in results_list:
-    print(f"{r['item']:<12} {r['weight']:>12.2f} {r['calories']:>18.2f}")
-
-print("-" * 50)
-
-# Total
-print(f"{'TOTAL':<12} {'':>12} {total_calories:>18.2f} kcal\n")
+print("=" * 60)
