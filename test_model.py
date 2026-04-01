@@ -8,6 +8,9 @@ from skimage.measure import label, regionprops
 import warnings
 warnings.filterwarnings("ignore")
 
+# =========================
+# LOAD MODELS & FILES
+# =========================
 model_det = YOLO("best_new.pt")
 
 calib_df = pd.read_csv("calibration.csv")
@@ -16,22 +19,35 @@ nutrition_df = pd.read_csv("nutrition.csv")
 nutrition_df["food"] = nutrition_df["food"].str.lower().str.strip()
 calorie_dict = dict(zip(nutrition_df["food"], nutrition_df["kcal_per_100g"]))
 
-img_path = "test_images2/test11_a100_po145.jpeg"
+# ✅ COUNT CONFIG
+count_df = pd.read_csv("count_based_config.csv")
+count_df["food"] = count_df["food"].str.lower().str.strip()
+count_weight_dict = dict(zip(count_df["food"], count_df["weight_per_item"]))
+
+# =========================
+# INPUT IMAGE
+# =========================
+img_path = "test_images2/test1_o115_b85_c65.jpeg"
 
 results = model_det(img_path, conf=0.25)
 
 total_calories = 0
 
 print("\n🍽️ Food Prediction Summary")
-print("=" * 60)
+print("=" * 65)
 
-# Table Header
-print(f"{'S.No':<6}{'Item':<15}{'Weight (g)':>15}{'Calories (kcal)':>20}")
-print("-" * 60)
+print(f"{'S.No':<6}{'Item':<20}{'Weight (g)':>15}{'Calories (kcal)':>20}")
+print("-" * 65)
 
 rows = []
 count = 1
 
+# 🔥 STORE COUNTS
+count_items = {}
+
+# =========================
+# MAIN LOOP
+# =========================
 for r in results:
     if r.masks is None:
         continue
@@ -69,11 +85,21 @@ for r in results:
 
         food = model_det.names[int(classes[i])].lower().strip()
 
+        # =========================
+        # ✅ COUNT-BASED (STORE ONLY)
+        # =========================
+        if food in count_weight_dict:
+            count_items[food] = count_items.get(food, 0) + 1
+            continue
+
+        # =========================
+        # 🔥 REGRESSION (UNCHANGED)
+        # =========================
         xgb = joblib.load(f"models/xgb_{food}.pkl")
         rf = joblib.load(f"models/rf_{food}.pkl")
         cols = joblib.load(f"models/cols_{food}.pkl")
 
-        # FEATURES (unchanged)
+        # FEATURES
         area_ratio = mask_area / (bbox_area + 1e-6)
         aspect_ratio = width / (height + 1e-6)
         solidity = mask_area / (convex_area + 1e-6)
@@ -120,13 +146,29 @@ for r in results:
         count += 1
 
 
-# 🔥 PRINT TABLE ROWS
+# =========================
+# 🔥 PROCESS COUNT ITEMS
+# =========================
+for food, cnt in count_items.items():
+    weight_per_item = count_weight_dict[food]
+
+    total_weight = cnt * weight_per_item
+    kcal = (total_weight / 100) * calorie_dict.get(food, 0)
+
+    total_calories += kcal
+
+    rows.append((count, f"{food} x {cnt}", total_weight, kcal))
+    count += 1
+
+
+# =========================
+# PRINT RESULTS
+# =========================
 for row in rows:
-    print(f"{row[0]:<6}{row[1]:<15}{row[2]:>15.2f}{row[3]:>20.2f}")
+    print(f"{row[0]:<6}{row[1]:<20}{row[2]:>15.2f}{row[3]:>20.2f}")
 
-print("-" * 60)
+print("-" * 65)
 
-# 🔥 TOTAL ROW
 print(f"{'TOTAL':<21}{'':>15}{total_calories:>20.2f}")
 
-print("=" * 60)
+print("=" * 65)
