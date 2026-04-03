@@ -116,7 +116,11 @@ if missing_files:
 # =====================================================
 @st.cache_resource
 def load_yolo_model():
-    return YOLO(MODEL_PATH)
+    try:
+        return YOLO(MODEL_PATH)
+    except Exception as e:
+        st.error(f"❌ YOLO model failed to load: {e}")
+        st.stop()
 
 @st.cache_data
 def load_calibration():
@@ -136,7 +140,9 @@ def load_count_config():
     df["food"] = df["food"].astype(str).str.lower().str.strip()
     return df
 
-model_det = load_yolo_model()
+# 👉 LAZY LOAD MODEL (FIX)
+model_det = None
+
 calib_df = load_calibration()
 nutrition_df = load_nutrition()
 count_df = load_count_config()
@@ -329,6 +335,12 @@ if uploaded_file is not None:
     st.markdown("<br>", unsafe_allow_html=True)
 
     if st.button("🔍 Predict Now"):
+        global model_det
+
+        if model_det is None:
+            with st.spinner("Loading model..."):
+                model_det = load_yolo_model()
+
         with st.spinner("Analyzing image and estimating calories..."):
             with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp_file:
                 temp_path = tmp_file.name
