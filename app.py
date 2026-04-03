@@ -1,14 +1,12 @@
 import os
 import warnings
 import tempfile
-
 import joblib
 import numpy as np
 import pandas as pd
 import streamlit as st
 from PIL import Image
 from skimage.measure import label, regionprops
-
 warnings.filterwarnings("ignore")
 
 # =====================================================
@@ -20,7 +18,68 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("🍽️ Food Detection & Calorie Estimation")
+# =====================================================
+# CUSTOM CSS
+# =====================================================
+st.markdown("""
+<style>
+.block-container {
+    padding-top: 2rem;
+    padding-bottom: 2rem;
+    max-width: 1200px;
+}
+.main-title {
+    font-size: 2.8rem;
+    font-weight: 800;
+    text-align: center;
+    margin-bottom: 0.2rem;
+}
+.sub-text {
+    text-align: center;
+    font-size: 1.1rem;
+    color: #b0b0b0;
+    margin-bottom: 2rem;
+}
+.card {
+    padding: 1.2rem;
+    border-radius: 18px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+}
+.metric-card {
+    padding: 1rem 1.2rem;
+    border-radius: 16px;
+    background: linear-gradient(135deg, rgba(29,78,216,0.18), rgba(236,72,153,0.18));
+    border: 1px solid rgba(255,255,255,0.08);
+    text-align: center;
+}
+.metric-value {
+    font-size: 2rem;
+    font-weight: 800;
+    color: white;
+}
+.metric-label {
+    font-size: 1rem;
+    color: #d1d5db;
+}
+.section-title {
+    font-size: 1.4rem;
+    font-weight: 700;
+    margin-bottom: 0.8rem;
+}
+.stButton > button {
+    width: 100%;
+    border-radius: 12px;
+    padding: 0.75rem 1rem;
+    font-size: 1rem;
+    font-weight: 700;
+}
+</style>
+""", unsafe_allow_html=True)
+
+st.markdown('<div class="main-title">🍽️ Multi Class Food Detection and Calorie Estimation</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-text">Upload a food image to detect multiple food items, estimate their weight, and calculate total calories.</div>', unsafe_allow_html=True)
 
 # =====================================================
 # PATHS
@@ -32,47 +91,50 @@ COUNT_CONFIG_PATH = "count_based_config.csv"
 MODELS_DIR = "models"
 
 # =====================================================
-# CHECK FILES
+# REQUIRED FILE CHECK
 # =====================================================
 required_files = [MODEL_PATH, CALIBRATION_PATH, NUTRITION_PATH, COUNT_CONFIG_PATH]
-missing = [f for f in required_files if not os.path.exists(f)]
-
+missing_files = [f for f in required_files if not os.path.exists(f)]
 if not os.path.isdir(MODELS_DIR):
-    missing.append("models/")
+    missing_files.append("models/")
 
-if missing:
-    st.error(f"Missing: {', '.join(missing)}")
+if missing_files:
+    st.error(f"Missing required files/folders: {', '.join(missing_files)}")
     st.stop()
 
 # =====================================================
-# LOAD MODEL
+# LOAD RESOURCES
 # =====================================================
 @st.cache_resource
 def load_yolo_model():
     from ultralytics import YOLO
     return YOLO(MODEL_PATH)
 
-# =====================================================
-# LOAD CSV
-# =====================================================
 @st.cache_data
-def load_csv(path):
-    df = pd.read_csv(path)
-    df["food"] = df["food"].str.lower().str.strip()
+def load_calibration():
+    df = pd.read_csv(CALIBRATION_PATH)
+    df["food"] = df["food"].astype(str).str.lower().str.strip()
     return df
 
-calib_df = load_csv(CALIBRATION_PATH)
-nutrition_df = load_csv(NUTRITION_PATH)
-count_df = load_csv(COUNT_CONFIG_PATH)
+@st.cache_data
+def load_nutrition():
+    df = pd.read_csv(NUTRITION_PATH)
+    df["food"] = df["food"].astype(str).str.lower().str.strip()
+    return df
+
+@st.cache_data
+def load_count_config():
+    df = pd.read_csv(COUNT_CONFIG_PATH)
+    df["food"] = df["food"].astype(str).str.lower().str.strip()
+    return df
+
+model_det = load_yolo_model()
+calib_df = load_calibration()
+nutrition_df = load_nutrition()
+count_df = load_count_config()
 
 calorie_dict = dict(zip(nutrition_df["food"], nutrition_df["kcal_per_100g"]))
 count_weight_dict = dict(zip(count_df["food"], count_df["weight_per_item"]))
-
-# =====================================================
-# SESSION MODEL
-# =====================================================
-if "model_det" not in st.session_state:
-    st.session_state.model_det = None
 
 # =====================================================
 # FEATURE EXTRACTION
@@ -81,7 +143,6 @@ def extract_features_from_mask(mask):
     y_idx, x_idx = np.where(mask)
     if len(x_idx) == 0:
         return None
-
     x_min, x_max = x_idx.min(), x_idx.max()
     y_min, y_max = y_idx.min(), y_idx.max()
     mask = mask[y_min:y_max + 1, x_min:x_max + 1]
@@ -94,12 +155,10 @@ def extract_features_from_mask(mask):
     regions = regionprops(labeled)
     if not regions:
         return None
-
     region = max(regions, key=lambda r: r.area)
 
     perimeter = region.perimeter
     convex_area = getattr(region, "convex_area", mask_area)
-
     major_axis = getattr(region, "axis_major_length", 0)
     minor_axis = getattr(region, "axis_minor_length", 1)
 
@@ -121,146 +180,164 @@ def extract_features_from_mask(mask):
 # SAFE WEIGHT PREDICTION
 # =====================================================
 def predict_weight_regression(food, feature_dict):
-    try:
-        xgb_path = os.path.join(MODELS_DIR, f"xgb_{food}.pkl")
-        rf_path = os.path.join(MODELS_DIR, f"rf_{food}.pkl")
-        cols_path = os.path.join(MODELS_DIR, f"cols_{food}.pkl")
-
-        if not (os.path.exists(xgb_path) and os.path.exists(rf_path) and os.path.exists(cols_path)):
-            return None
-
-        xgb = joblib.load(xgb_path)
-        rf = joblib.load(rf_path)
-        cols = joblib.load(cols_path)
-
-        df = pd.DataFrame([feature_dict])
-
-        for col in cols:
-            if col not in df:
-                df[col] = 0
-
-        df = df[cols]
-
-        # ---------- SAFE XGBOOST ----------
-        try:
-            import xgboost as xgb_lib
-            dmatrix = xgb_lib.DMatrix(df)
-            xgb_pred = xgb.get_booster().predict(dmatrix)[0]
-            xgb_pred = np.exp(xgb_pred) - 1
-        except Exception as e:
-            st.warning(f"XGB failed for {food}")
-            xgb_pred = 0
-
-        # ---------- RANDOM FOREST ----------
-        try:
-            rf_pred = np.exp(rf.predict(df)[0]) - 1
-        except Exception as e:
-            st.warning(f"RF failed for {food}")
-            rf_pred = 0
-
-        pred = 0.5 * (xgb_pred + rf_pred)
-
-        # calibration
-        row = calib_df[calib_df["food"] == food]
-        if not row.empty:
-            pred = row["a"].values[0] * pred + row["b"].values[0]
-
-        return max(float(pred), 0)
-
-    except Exception as e:
-        st.error(f"Model failed for {food}: {e}")
+    xgb_path = os.path.join(MODELS_DIR, f"xgb_{food}.pkl")
+    rf_path = os.path.join(MODELS_DIR, f"rf_{food}.pkl")
+    cols_path = os.path.join(MODELS_DIR, f"cols_{food}.pkl")
+    if not (os.path.exists(xgb_path) and os.path.exists(rf_path) and os.path.exists(cols_path)):
         return None
+
+    xgb = joblib.load(xgb_path)
+    rf = joblib.load(rf_path)
+    cols = joblib.load(cols_path)
+
+    features = pd.DataFrame([feature_dict])
+    for col in cols:
+        if col not in features.columns:
+            features[col] = 0
+    features = features[cols]
+
+    pred_xgb = np.exp(xgb.predict(features)[0]) - 1
+    pred_rf = np.exp(rf.predict(features)[0]) - 1
+    pred = 0.5 * pred_xgb + 0.5 * pred_rf
+
+    row = calib_df[calib_df["food"] == food]
+    if len(row) > 0:
+        pred = row["a"].values[0] * pred + row["b"].values[0]
+
+    return max(float(pred), 0.0)
 
 # =====================================================
 # MAIN PREDICTION
 # =====================================================
 def run_prediction(image_path):
-    model = st.session_state.model_det
-    results = model(image_path, conf=0.25)
-
-    rows, total_calories = [], 0
+    results = model_det(image_path, conf=0.25)
+    rows = []
+    total_calories = 0.0
     count_items = {}
-    idx = 1
-
-    annotated = results[0].plot() if results else None
+    count = 1
+    annotated_image = results[0].plot() if results and len(results) > 0 else None
 
     for r in results:
         if r.masks is None:
             continue
-
         masks = r.masks.data.cpu().numpy()
         classes = r.boxes.cls.cpu().numpy()
 
         for i in range(len(masks)):
             mask = (masks[i] > 0.5).astype(np.uint8)
-            food = model.names[int(classes[i])].lower().strip()
+            food = model_det.names[int(classes[i])].lower().strip()
 
             if food in count_weight_dict:
                 count_items[food] = count_items.get(food, 0) + 1
                 continue
 
-            feat = extract_features_from_mask(mask)
-            if feat is None:
+            feature_dict = extract_features_from_mask(mask)
+            if feature_dict is None:
                 continue
 
-            weight = predict_weight_regression(food, feat)
-
-            if weight is None:
+            pred_weight = predict_weight_regression(food, feature_dict)
+            if pred_weight is None:
                 continue
 
-            kcal = (weight / 100) * calorie_dict.get(food, 0)
+            kcal = (pred_weight / 100) * calorie_dict.get(food, 0)
             total_calories += kcal
 
             rows.append({
-                "S.No": idx,
+                "S.No": count,
                 "Item": food.title(),
-                "Weight (g)": round(weight, 2),
+                "Weight (g)": round(pred_weight, 2),
                 "Calories (kcal)": round(kcal, 2)
             })
-            idx += 1
+            count += 1
 
-    # count-based foods
     for food, cnt in count_items.items():
-        total_w = cnt * count_weight_dict[food]
-        kcal = (total_w / 100) * calorie_dict.get(food, 0)
+        total_weight = cnt * count_weight_dict[food]
+        kcal = (total_weight / 100) * calorie_dict.get(food, 0)
         total_calories += kcal
-
         rows.append({
-            "S.No": idx,
+            "S.No": count,
             "Item": f"{food.title()} x {cnt}",
-            "Weight (g)": round(total_w, 2),
+            "Weight (g)": round(total_weight, 2),
             "Calories (kcal)": round(kcal, 2)
         })
-        idx += 1
+        count += 1
 
-    return pd.DataFrame(rows), round(total_calories, 2), annotated
+    return pd.DataFrame(rows), round(total_calories, 2), annotated_image
 
 # =====================================================
-# UI
+# MAIN UI
 # =====================================================
-file = st.file_uploader("Upload image", type=["jpg", "png"])
+st.markdown('<div class="card">', unsafe_allow_html=True)
+uploaded_file = st.file_uploader("Upload a food image", type=["jpg", "jpeg", "png"])
+st.markdown('</div>', unsafe_allow_html=True)
 
-if file:
-    image = Image.open(file).convert("RGB")
-    st.image(image)
+if uploaded_file is not None:
+    image = Image.open(uploaded_file).convert("RGB")
+    st.markdown("<br>", unsafe_allow_html=True)
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown('<div class="section-title">Uploaded Image</div>', unsafe_allow_html=True)
+        st.image(image, use_container_width=True)
+    with col2:
+        st.markdown('<div class="section-title">Detection Preview</div>', unsafe_allow_html=True)
+        preview_placeholder = st.empty()
 
+    st.markdown("<br>", unsafe_allow_html=True)
     if st.button("🔍 Predict Now"):
+        with st.spinner("Analyzing image and estimating calories..."):
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp_file:
+                temp_path = tmp_file.name
+                image.save(temp_path)
+            try:
+                result_df, total_calories, annotated_image = run_prediction(temp_path)
 
-        if st.session_state.model_det is None:
-            st.session_state.model_det = load_yolo_model()
+                with col2:
+                    if annotated_image is not None:
+                        preview_placeholder.image(annotated_image, channels="BGR", use_container_width=True)
+                    else:
+                        preview_placeholder.warning("No detections found.")
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-            image.save(tmp.name)
-            path = tmp.name
+                st.markdown("<br>", unsafe_allow_html=True)
+                metric_col1, metric_col2, metric_col3 = st.columns(3)
+                with metric_col1:
+                    st.markdown(f"""
+                    <div class="metric-card">
+                        <div class="metric-value">{len(result_df)}</div>
+                        <div class="metric-label">Detected Items</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                with metric_col2:
+                    total_weight = result_df["Weight (g)"].sum() if not result_df.empty else 0
+                    st.markdown(f"""
+                    <div class="metric-card">
+                        <div class="metric-value">{total_weight:.2f} g</div>
+                        <div class="metric-label">Estimated Total Weight</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                with metric_col3:
+                    st.markdown(f"""
+                    <div class="metric-card">
+                        <div class="metric-value">{total_calories:.2f} kcal</div>
+                        <div class="metric-label">Total Calories</div>
+                    </div>
+                    """, unsafe_allow_html=True)
 
-        df, total_cal, img = run_prediction(path)
+                st.markdown("<br>", unsafe_allow_html=True)
+                st.markdown('<div class="section-title">Prediction Summary</div>', unsafe_allow_html=True)
+                if result_df.empty:
+                    st.warning("No valid food items were detected.")
+                else:
+                    st.dataframe(result_df, use_container_width=True, hide_index=True)
+                    csv = result_df.to_csv(index=False).encode("utf-8")
+                    st.download_button(
+                        label="📥 Download Results CSV",
+                        data=csv,
+                        file_name="food_prediction_results.csv",
+                        mime="text/csv"
+                    )
 
-        if img is not None:
-            st.image(img, channels="BGR")
-
-        st.write("### Results")
-        st.dataframe(df)
-
-        st.success(f"🔥 Total Calories: {total_cal} kcal")
-
-        os.remove(path)
+            except Exception as e:
+                st.error(f"Prediction failed: {e}")
+            finally:
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
