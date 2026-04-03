@@ -140,7 +140,7 @@ def load_count_config():
     df["food"] = df["food"].astype(str).str.lower().str.strip()
     return df
 
-# 👉 LAZY LOAD MODEL (FIX)
+# 👉 Lazy load model (fix)
 model_det = None
 
 calib_df = load_calibration()
@@ -335,7 +335,6 @@ if uploaded_file is not None:
     st.markdown("<br>", unsafe_allow_html=True)
 
     if st.button("🔍 Predict Now"):
-        global model_det
 
         if model_det is None:
             with st.spinner("Loading model..."):
