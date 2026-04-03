@@ -20,49 +20,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# =====================================================
-# CUSTOM CSS
-# =====================================================
-st.markdown("""
-<style>
-.block-container {
-    padding-top: 2rem;
-    padding-bottom: 2rem;
-    max-width: 1200px;
-}
-.main-title {
-    font-size: 2.8rem;
-    font-weight: 800;
-    text-align: center;
-}
-.sub-text {
-    text-align: center;
-    font-size: 1.1rem;
-    color: #b0b0b0;
-    margin-bottom: 2rem;
-}
-.card {
-    padding: 1.2rem;
-    border-radius: 18px;
-    background: rgba(255,255,255,0.04);
-}
-.metric-card {
-    padding: 1rem;
-    border-radius: 16px;
-    text-align: center;
-}
-.metric-value {
-    font-size: 2rem;
-    font-weight: 800;
-}
-.metric-label {
-    font-size: 1rem;
-}
-</style>
-""", unsafe_allow_html=True)
-
-st.markdown('<div class="main-title">🍽️ Multi Class Food Detection and Calorie Estimation</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-text">Upload image → detect → weight → calories</div>', unsafe_allow_html=True)
+st.title("🍽️ Food Detection & Calorie Estimation")
 
 # =====================================================
 # PATHS
@@ -74,7 +32,7 @@ COUNT_CONFIG_PATH = "count_based_config.csv"
 MODELS_DIR = "models"
 
 # =====================================================
-# FILE CHECK
+# CHECK FILES
 # =====================================================
 required_files = [MODEL_PATH, CALIBRATION_PATH, NUTRITION_PATH, COUNT_CONFIG_PATH]
 missing = [f for f in required_files if not os.path.exists(f)]
@@ -87,17 +45,16 @@ if missing:
     st.stop()
 
 # =====================================================
-# LOADERS
+# LOAD MODEL
 # =====================================================
 @st.cache_resource
 def load_yolo_model():
-    try:
-        from ultralytics import YOLO  # ✅ FIX: lazy import
-        return YOLO(MODEL_PATH)
-    except Exception as e:
-        st.error(f"YOLO load failed: {e}")
-        st.stop()
+    from ultralytics import YOLO
+    return YOLO(MODEL_PATH)
 
+# =====================================================
+# LOAD CSV
+# =====================================================
 @st.cache_data
 def load_csv(path):
     df = pd.read_csv(path)
@@ -112,13 +69,13 @@ calorie_dict = dict(zip(nutrition_df["food"], nutrition_df["kcal_per_100g"]))
 count_weight_dict = dict(zip(count_df["food"], count_df["weight_per_item"]))
 
 # =====================================================
-# MODEL HOLDER
+# SESSION MODEL
 # =====================================================
 if "model_det" not in st.session_state:
     st.session_state.model_det = None
 
 # =====================================================
-# HELPERS (UNCHANGED)
+# FEATURE EXTRACTION
 # =====================================================
 def extract_features_from_mask(mask):
     y_idx, x_idx = np.where(mask)
@@ -160,34 +117,63 @@ def extract_features_from_mask(mask):
         "fill_ratio": mask_area / (convex_area + 1e-6),
     }
 
+# =====================================================
+# SAFE WEIGHT PREDICTION
+# =====================================================
 def predict_weight_regression(food, feature_dict):
-    xgb_path = os.path.join(MODELS_DIR, f"xgb_{food}.pkl")
-    rf_path = os.path.join(MODELS_DIR, f"rf_{food}.pkl")
-    cols_path = os.path.join(MODELS_DIR, f"cols_{food}.pkl")
+    try:
+        xgb_path = os.path.join(MODELS_DIR, f"xgb_{food}.pkl")
+        rf_path = os.path.join(MODELS_DIR, f"rf_{food}.pkl")
+        cols_path = os.path.join(MODELS_DIR, f"cols_{food}.pkl")
 
-    if not (os.path.exists(xgb_path) and os.path.exists(rf_path) and os.path.exists(cols_path)):
+        if not (os.path.exists(xgb_path) and os.path.exists(rf_path) and os.path.exists(cols_path)):
+            return None
+
+        xgb = joblib.load(xgb_path)
+        rf = joblib.load(rf_path)
+        cols = joblib.load(cols_path)
+
+        df = pd.DataFrame([feature_dict])
+
+        for col in cols:
+            if col not in df:
+                df[col] = 0
+
+        df = df[cols]
+
+        # ---------- SAFE XGBOOST ----------
+        try:
+            import xgboost as xgb_lib
+            dmatrix = xgb_lib.DMatrix(df)
+            xgb_pred = xgb.get_booster().predict(dmatrix)[0]
+            xgb_pred = np.exp(xgb_pred) - 1
+        except Exception as e:
+            st.warning(f"XGB failed for {food}")
+            xgb_pred = 0
+
+        # ---------- RANDOM FOREST ----------
+        try:
+            rf_pred = np.exp(rf.predict(df)[0]) - 1
+        except Exception as e:
+            st.warning(f"RF failed for {food}")
+            rf_pred = 0
+
+        pred = 0.5 * (xgb_pred + rf_pred)
+
+        # calibration
+        row = calib_df[calib_df["food"] == food]
+        if not row.empty:
+            pred = row["a"].values[0] * pred + row["b"].values[0]
+
+        return max(float(pred), 0)
+
+    except Exception as e:
+        st.error(f"Model failed for {food}: {e}")
         return None
 
-    xgb = joblib.load(xgb_path)
-    rf = joblib.load(rf_path)
-    cols = joblib.load(cols_path)
-
-    df = pd.DataFrame([feature_dict])
-
-    for col in cols:
-        if col not in df:
-            df[col] = 0
-
-    df = df[cols]
-
-    pred = 0.5 * (np.exp(xgb.predict(df)[0]) - 1 + np.exp(rf.predict(df)[0]) - 1)
-
-    row = calib_df[calib_df["food"] == food]
-    if not row.empty:
-        pred = row["a"].values[0] * pred + row["b"].values[0]
-
-    return max(float(pred), 0)
-
+# =====================================================
+# MAIN PREDICTION
+# =====================================================
 def run_prediction(image_path):
     model = st.session_state.model_det
     results = model(image_path, conf=0.25)
@@ -218,6 +204,7 @@ def run_prediction(image_path):
                 continue
 
             weight = predict_weight_regression(food, feat)
+
             if weight is None:
                 continue
 
@@ -232,6 +219,7 @@ def run_prediction(image_path):
             })
             idx += 1
 
+    # count-based foods
     for food, cnt in count_items.items():
         total_w = cnt * count_weight_dict[food]
         kcal = (total_w / 100) * calorie_dict.get(food, 0)
