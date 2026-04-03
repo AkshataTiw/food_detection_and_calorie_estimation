@@ -1,6 +1,6 @@
 setuptools>=65.0.0
 streamlit==1.32.0
-ultralytics==8.0.20
+ultralytics==8.2.103
 torch==2.1.2
 torchvision==0.16.2
 pandas==2.1.4
