@@ -1,10 +1,11 @@
-streamlit
+gradio
 ultralytics
-pandas
-numpy
 joblib
-scikit-image
-scikit-learn
-xgboost
+numpy
+pandas
 pillow
+matplotlib
+scikit-image
 opencv-python-headless
+xgboost
+scikit-learn
