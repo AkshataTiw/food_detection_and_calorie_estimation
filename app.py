@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import os
 import warnings
 import tempfile
@@ -5,84 +6,14 @@ import tempfile
 import joblib
 import numpy as np
 import pandas as pd
-import streamlit as st
+import gradio as gr
+import matplotlib.pyplot as plt
+
 from PIL import Image
 from ultralytics import YOLO
 from skimage.measure import label, regionprops
 
 warnings.filterwarnings("ignore")
-
-# =====================================================
-# PAGE CONFIG
-# =====================================================
-st.set_page_config(
-    page_title="Multi Class Food Detection and Calorie Estimation",
-    page_icon="🍽️",
-    layout="wide"
-)
-
-# =====================================================
-# CUSTOM CSS
-# =====================================================
-st.markdown("""
-<style>
-.block-container {
-    padding-top: 2rem;
-    padding-bottom: 2rem;
-    max-width: 1200px;
-}
-.main-title {
-    font-size: 2.8rem;
-    font-weight: 800;
-    text-align: center;
-    margin-bottom: 0.2rem;
-}
-.sub-text {
-    text-align: center;
-    font-size: 1.1rem;
-    color: #b0b0b0;
-    margin-bottom: 2rem;
-}
-.card {
-    padding: 1.2rem;
-    border-radius: 18px;
-    background: rgba(255,255,255,0.04);
-    border: 1px solid rgba(255,255,255,0.08);
-    box-shadow: 0 8px 24px rgba(0,0,0,0.15);
-}
-.metric-card {
-    padding: 1rem 1.2rem;
-    border-radius: 16px;
-    background: linear-gradient(135deg, rgba(29,78,216,0.18), rgba(236,72,153,0.18));
-    border: 1px solid rgba(255,255,255,0.08);
-    text-align: center;
-}
-.metric-value {
-    font-size: 2rem;
-    font-weight: 800;
-    color: white;
-}
-.metric-label {
-    font-size: 1rem;
-    color: #d1d5db;
-}
-.section-title {
-    font-size: 1.4rem;
-    font-weight: 700;
-    margin-bottom: 0.8rem;
-}
-.stButton > button {
-    width: 100%;
-    border-radius: 12px;
-    padding: 0.75rem 1rem;
-    font-size: 1rem;
-    font-weight: 700;
-}
-</style>
-""", unsafe_allow_html=True)
-
-st.markdown('<div class="main-title">🍽️ Multi Class Food Detection and Calorie Estimation</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-text">Upload a food image to detect multiple food items, estimate their weight, and calculate total calories.</div>', unsafe_allow_html=True)
 
 # =====================================================
 # PATHS
@@ -108,41 +39,28 @@ if not os.path.isdir(MODELS_DIR):
     missing_files.append("models/")
 
 if missing_files:
-    st.error(f"Missing required files/folders: {', '.join(missing_files)}")
-    st.stop()
+    raise FileNotFoundError(f"Missing required files/folders: {', '.join(missing_files)}")
 
 # =====================================================
 # LOAD RESOURCES
 # =====================================================
-@st.cache_resource
-def load_yolo_model():
-    return YOLO(MODEL_PATH)
+print("Loading model and resources...")
 
-@st.cache_data
-def load_calibration():
-    df = pd.read_csv(CALIBRATION_PATH)
-    df["food"] = df["food"].astype(str).str.lower().str.strip()
-    return df
+model_det = YOLO(MODEL_PATH)
 
-@st.cache_data
-def load_nutrition():
-    df = pd.read_csv(NUTRITION_PATH)
-    df["food"] = df["food"].astype(str).str.lower().str.strip()
-    return df
+calib_df = pd.read_csv(CALIBRATION_PATH)
+calib_df["food"] = calib_df["food"].astype(str).str.lower().str.strip()
 
-@st.cache_data
-def load_count_config():
-    df = pd.read_csv(COUNT_CONFIG_PATH)
-    df["food"] = df["food"].astype(str).str.lower().str.strip()
-    return df
+nutrition_df = pd.read_csv(NUTRITION_PATH)
+nutrition_df["food"] = nutrition_df["food"].astype(str).str.lower().str.strip()
 
-model_det = load_yolo_model()
-calib_df = load_calibration()
-nutrition_df = load_nutrition()
-count_df = load_count_config()
+count_df = pd.read_csv(COUNT_CONFIG_PATH)
+count_df["food"] = count_df["food"].astype(str).str.lower().str.strip()
 
 calorie_dict = dict(zip(nutrition_df["food"], nutrition_df["kcal_per_100g"]))
 count_weight_dict = dict(zip(count_df["food"], count_df["weight_per_item"]))
+
+print("Resources loaded successfully.")
 
 # =====================================================
 # HELPERS
@@ -191,7 +109,6 @@ def extract_features_from_mask(mask):
 
     roundness = (4 * np.pi * mask_area) / (perimeter ** 2 + 1e-6)
     compactness = (perimeter ** 2) / (mask_area + 1e-6)
-
     elongation = major_axis / (minor_axis + 1e-6)
     fill_ratio = mask_area / (convex_area + 1e-6)
 
@@ -208,6 +125,7 @@ def extract_features_from_mask(mask):
         "elongation": elongation,
         "fill_ratio": fill_ratio,
     }
+
 
 def predict_weight_regression(food, feature_dict):
     xgb_path = os.path.join(MODELS_DIR, f"xgb_{food}.pkl")
@@ -239,15 +157,16 @@ def predict_weight_regression(food, feature_dict):
 
     return max(float(pred), 0.0)
 
+
 def run_prediction(image_path):
     results = model_det(image_path, conf=0.25)
 
     rows = []
     total_calories = 0.0
     count_items = {}
-    count = 1
-
+    serial_no = 1
     annotated_image = None
+
     if results and len(results) > 0:
         annotated_image = results[0].plot()
 
@@ -279,12 +198,13 @@ def run_prediction(image_path):
             total_calories += kcal
 
             rows.append({
-                "S.No": count,
-                "Item": food.title(),
-                "Weight (g)": round(pred_weight, 2),
-                "Calories (kcal)": round(kcal, 2)
+                "S.No": serial_no,
+                "Detected Food Item": food.title(),
+                "Estimation Method": "Regression",
+                "Estimated Weight (g)": round(pred_weight, 2),
+                "Estimated Calories (kcal)": round(kcal, 2)
             })
-            count += 1
+            serial_no += 1
 
     for food, cnt in count_items.items():
         weight_per_item = count_weight_dict[food]
@@ -293,104 +213,668 @@ def run_prediction(image_path):
         total_calories += kcal
 
         rows.append({
-            "S.No": count,
-            "Item": f"{food.title()} x {cnt}",
-            "Method": "Count-based",
-            "Weight (g)": round(total_weight, 2),
-            "Calories (kcal)": round(kcal, 2)
+            "S.No": serial_no,
+            "Detected Food Item": f"{food.title()} x {cnt}",
+            "Estimation Method": "Count-Based",
+            "Estimated Weight (g)": round(total_weight, 2),
+            "Estimated Calories (kcal)": round(kcal, 2)
         })
-        count += 1
+        serial_no += 1
 
     result_df = pd.DataFrame(rows)
     return result_df, round(total_calories, 2), annotated_image
 
-# =====================================================
-# MAIN UI
-# =====================================================
-st.markdown('<div class="card">', unsafe_allow_html=True)
-uploaded_file = st.file_uploader("Upload a food image", type=["jpg", "jpeg", "png"])
-st.markdown('</div>', unsafe_allow_html=True)
 
+def create_pie_chart(result_df):
+    fig, ax = plt.subplots(figsize=(7, 7))
+
+    if result_df.empty or "Estimated Calories (kcal)" not in result_df.columns:
+        ax.text(0.5, 0.5, "No prediction data available", ha="center", va="center", fontsize=14)
+        ax.axis("off")
+        return fig
+
+    labels = result_df["Detected Food Item"].tolist()
+    values = result_df["Estimated Calories (kcal)"].tolist()
+
+    ax.pie(values, labels=labels, autopct="%1.1f%%", startangle=90)
+    ax.set_title("Calorie Contribution by Detected Food Item", fontsize=15)
+    return fig
+
+
+def save_results_csv(result_df):
+    csv_path = "food_prediction_results.csv"
+    result_df.to_csv(csv_path, index=False)
+    return csv_path
+
+
+def predict_food(image):
+    if image is None:
+        empty_df = pd.DataFrame(columns=[
+            "S.No",
+            "Detected Food Item",
+            "Estimation Method",
+            "Estimated Weight (g)",
+            "Estimated Calories (kcal)"
+        ])
+        return (
+            gr.update(visible=False),
+            None,
+            "<div class='message-box'>Please upload a food image to continue.</div>",
+            "<div class='stats-grid'></div>",
+            empty_df,
+            None,
+            None
+        )
+
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp_file:
+            temp_path = tmp_file.name
+            if isinstance(image, Image.Image):
+                pil_image = image.convert("RGB")
+            else:
+                pil_image = Image.fromarray(image).convert("RGB")
+            pil_image.save(temp_path)
+
+        result_df, total_calories, annotated_image = run_prediction(temp_path)
+
+        if annotated_image is not None:
+            annotated_image = annotated_image[:, :, ::-1]
+
+        if result_df.empty:
+            empty_df = pd.DataFrame(columns=[
+                "S.No",
+                "Detected Food Item",
+                "Estimated Weight (g)",
+                "Estimated Calories (kcal)"
+            ])
+            return (
+                gr.update(visible=True),
+                annotated_image,
+                "<div class='message-box'>No valid food items were detected in the uploaded image.</div>",
+                "<div class='stats-grid'></div>",
+                empty_df,
+                None,
+                create_pie_chart(result_df)
+            )
+
+        total_weight = result_df["Estimated Weight (g)"].sum()
+        detected_count = len(result_df)
+
+        summary_html = """
+        <div class='message-box success-box'>
+            Analysis completed successfully. The detected food items, estimated weights, and calorie values are displayed below.
+        </div>
+        """
+
+        stats_html = f"""
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-value">{detected_count}</div>
+                <div class="stat-label">Detected Items</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">{total_weight:.2f} g</div>
+                <div class="stat-label">Estimated Total Weight</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">{total_calories:.2f} kcal</div>
+                <div class="stat-label">Estimated Total Calories</div>
+            </div>
+        </div>
+        """
+
+        csv_file = save_results_csv(result_df)
+        pie_chart = create_pie_chart(result_df)
+
+        return (
+            gr.update(visible=True),
+            annotated_image,
+            summary_html,
+            stats_html,
+            result_df,
+            csv_file,
+            pie_chart
+        )
+
+    except Exception as e:
+        empty_df = pd.DataFrame(columns=[
+            "S.No",
+            "Detected Food Item",
+            "Estimation Method",
+            "Estimated Weight (g)",
+            "Estimated Calories (kcal)"
+        ])
+        return (
+            gr.update(visible=True),
+            None,
+            f"<div class='message-box error-box'>Prediction failed: {str(e)}</div>",
+            "<div class='stats-grid'></div>",
+            empty_df,
+            None,
+            None
+        )
+
+    finally:
+        if "temp_path" in locals() and os.path.exists(temp_path):
+            os.remove(temp_path)
+
+
+# =====================================================
+# BEAUTIFUL UI
+# =====================================================
+custom_css = """
+:root {
+    --bg: #06070b;
+    --panel: rgba(17, 24, 39, 0.78);
+    --panel-2: rgba(15, 23, 42, 0.92);
+    --border: rgba(255,255,255,0.08);
+    --text: #f8fafc;
+    --muted: #94a3b8;
+    --accent1: #7c3aed;
+    --accent2: #ec4899;
+    --accent3: #06b6d4;
+}
+
+body, .gradio-container {
+    background:
+        radial-gradient(circle at top left, rgba(124,58,237,0.18), transparent 30%),
+        radial-gradient(circle at top right, rgba(236,72,153,0.12), transparent 28%),
+        linear-gradient(180deg, #05060a 0%, #090b12 100%);
+    color: var(--text);
+    font-family: Inter, Arial, sans-serif;
+}
+
+.gradio-container {
+    max-width: 1250px !important;
+    margin: 0 auto !important;
+    padding-top: 18px !important;
+}
+
+.hero-wrap {
+    text-align: center;
+    margin-bottom: 22px;
+}
+
+.hero-badge {
+    display: inline-block;
+    padding: 8px 16px;
+    border-radius: 999px;
+    border: 1px solid rgba(255,255,255,0.1);
+    background: rgba(255,255,255,0.04);
+    color: #dbeafe;
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 18px;
+    backdrop-filter: blur(10px);
+}
+
+.hero-title {
+    font-size: 42px;
+    font-weight: 800;
+    line-height: 1.15;
+    margin-bottom: 12px;
+    background: linear-gradient(90deg, #ffffff 0%, #c4b5fd 40%, #67e8f9 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+.hero-subtitle {
+    max-width: 860px;
+    margin: 0 auto;
+    color: var(--muted);
+    font-size: 17px;
+    line-height: 1.7;
+}
+
+.main-panel {
+    border: 1px solid var(--border);
+    background: linear-gradient(180deg, rgba(17,24,39,0.72), rgba(10,15,28,0.9));
+    border-radius: 24px;
+    padding: 20px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.35);
+    backdrop-filter: blur(18px);
+}
+
+.section-heading {
+    font-size: 22px;
+    font-weight: 700;
+    color: #f8fafc;
+    margin-bottom: 6px;
+}
+
+.section-subtext {
+    color: var(--muted);
+    font-size: 14px;
+    margin-bottom: 18px;
+}
+
+.upload-note {
+    color: #cbd5e1;
+    font-size: 13px;
+    margin-top: 6px;
+}
+
+button.primary-btn {
+    background: linear-gradient(90deg, #7c3aed, #ec4899, #06b6d4) !important;
+    color: white !important;
+    border: none !important;
+    font-weight: 700 !important;
+    border-radius: 14px !important;
+    min-height: 52px !important;
+    box-shadow: 0 10px 30px rgba(124,58,237,0.28) !important;
+}
+
+button.primary-btn:hover {
+    filter: brightness(1.05);
+}
+
+.results-shell {
+    margin-top: 22px;
+    border: 1px solid var(--border);
+    background: linear-gradient(180deg, rgba(8,12,22,0.92), rgba(14,19,31,0.95));
+    border-radius: 24px;
+    padding: 22px;
+    box-shadow: 0 18px 50px rgba(0,0,0,0.28);
+}
+
+.message-box {
+    border-radius: 16px;
+    padding: 14px 16px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    color: #e2e8f0;
+    font-size: 14px;
+    line-height: 1.6;
+}
+
+.success-box {
+    background: rgba(16,185,129,0.08);
+    border: 1px solid rgba(16,185,129,0.22);
+}
+
+.error-box {
+    background: rgba(239,68,68,0.08);
+    border: 1px solid rgba(239,68,68,0.2);
+}
+
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px;
+    margin: 18px 0 8px 0;
+}
+
+.stat-card {
+    padding: 20px 18px;
+    border-radius: 18px;
+    background: linear-gradient(135deg, rgba(124,58,237,0.18), rgba(6,182,212,0.12));
+    border: 1px solid rgba(255,255,255,0.08);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
+}
+
+.stat-value {
+    font-size: 28px;
+    font-weight: 800;
+    color: #ffffff;
+    margin-bottom: 8px;
+}
+
+.stat-label {
+    font-size: 13px;
+    color: #cbd5e1;
+    letter-spacing: 0.2px;
+}
+
+.result-title {
+    font-size: 18px;
+    font-weight: 700;
+    margin-bottom: 12px;
+    color: #f8fafc;
+}
+
+footer {
+    display: none !important;
+}
+
+@media (max-width: 900px) {
+    .hero-title {
+        font-size: 32px;
+    }
+    .stats-grid {
+        grid-template-columns: 1fr;
+    }
+}
+"""
+
+with gr.Blocks(css=custom_css, title="Multi-Class Food Detection and Calorie Estimation", theme=gr.themes.Base()) as demo:
+    gr.HTML("""
+        <div class="hero-wrap">
+            <div class="hero-badge">AI-Powered Food Analysis System</div>
+            <div class="hero-title">A Hybrid Computer Vision Framework for Food Detection and Calorie Estimation Using Deep Learning and Regression Models.</div>
+            <div class="hero-subtitle">
+                Upload a food image to identify multiple food items, estimate their weight, and calculate the corresponding calorie contribution with a clear visual summary.
+            </div>
+        </div>
+    """)
+
+    with gr.Column(elem_classes="main-panel"):
+        gr.HTML("""
+            <div class="section-heading">Upload Image</div>
+            <div class="section-subtext">
+                Select a food image to begin analysis. The system will detect the visible food items and generate an estimated nutritional summary.
+            </div>
+        """)
+
+        with gr.Row():
+            input_image = gr.Image(
+                type="pil",
+                label="Food Image",
+                height=360
+            )
+
+        gr.HTML("<div class='upload-note'>Supported formats: JPG, JPEG, PNG</div>")
+
+        predict_btn = gr.Button("Analyze Image", elem_classes="primary-btn")
+
+    # Hidden results section at startup
+    with gr.Column(visible=False, elem_classes="results-shell") as results_section:
+        gr.HTML("<div class='result-title'>Analysis Results</div>")
+
+        with gr.Row():
+            output_image = gr.Image(
+                type="numpy",
+                label="Detected Food Items",
+                height=420
+            )
+
+        summary_output = gr.HTML()
+        stats_output = gr.HTML()
+
+        result_table = gr.Dataframe(
+            label="Detailed Prediction Summary",
+            interactive=False,
+            wrap=True
+        )
+
+        with gr.Row():
+            csv_output = gr.File(label="Download Prediction Results")
+
+        pie_chart_output = gr.Plot(label="Calorie Distribution Chart")
+
+    predict_btn.click(
+        fn=predict_food,
+        inputs=input_image,
+        outputs=[
+            results_section,
+            output_image,
+            summary_output,
+            stats_output,
+            result_table,
+            csv_output,
+            pie_chart_output
+        ]
+    )
+
+if __name__ == "__main__":
+    demo.launch()
+=======
+import streamlit as st
+from PIL import Image
+import numpy as np
+import pandas as pd
+import tempfile
+import os
+import matplotlib.pyplot as plt
+from ultralytics import YOLO
+
+# -----------------------------
+# Page Config
+# -----------------------------
+st.set_page_config(
+    page_title="Food Detection and Calorie Estimation",
+    page_icon="🍽️",
+    layout="wide"
+)
+
+# -----------------------------
+# Custom Styling (YOUR ORIGINAL)
+# -----------------------------
+st.markdown("""
+<style>
+.title {
+font-size:42px;
+font-weight:800;
+text-align:center;
+background: linear-gradient(90deg,#ff416c,#ff4b2b,#ffb347);
+-webkit-background-clip:text;
+-webkit-text-fill-color:transparent;
+margin-bottom:5px;
+}
+.subtitle {
+text-align:center;
+font-size:18px;
+color:#8aa0b4;
+margin-bottom:5px;
+}
+.banner {
+background:linear-gradient(135deg,#1f4037,#99f2c8);
+padding:12px;
+border-radius:12px;
+text-align:center;
+font-size:16px;
+font-weight:600;
+color:black;
+margin-top:10px;
+margin-bottom:20px;
+}
+.card{
+background:linear-gradient(135deg,#667eea,#764ba2);
+padding:8px;
+border-radius:10px;
+text-align:center;
+color:white;
+margin-bottom:8px;
+font-size:14px;
+}
+.sidebar-title{
+font-size:22px;
+font-weight:700;
+text-align:center;
+margin-bottom:10px;
+color:#ff7a18;
+}
+.sidebar-box{
+background:linear-gradient(135deg,#1c1c1c,#2c3e50);
+padding:10px;
+border-radius:10px;
+margin-bottom:10px;
+color:white;
+text-align:center;
+}
+.support-text{
+font-size:13px;
+color:#9ca3af;
+margin-top:-8px;
+text-align:center;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# -----------------------------
+# Header
+# -----------------------------
+st.markdown('<div class="title">🍽️ FOOD DETECTION AND CALORIE ESTIMATION</div>', unsafe_allow_html=True)
+st.markdown('<div class="subtitle">Upload a food image and detect items using your trained YOLO model</div>', unsafe_allow_html=True)
+
+# -----------------------------
+# Sidebar
+# -----------------------------
+st.sidebar.markdown('<div class="sidebar-title">⚙ Detection Settings</div>', unsafe_allow_html=True)
+st.sidebar.markdown('<div class="sidebar-box">Adjust confidence level for detection</div>', unsafe_allow_html=True)
+
+confidence = st.sidebar.slider("Confidence Threshold", 0.0, 1.0, 0.25, 0.01)
+
+st.sidebar.markdown("### 📷 Upload Food Image")
+
+uploaded_file = st.sidebar.file_uploader("Upload", type=["jpg","jpeg","png"])
+
+st.sidebar.markdown(
+    '<div class="support-text">Supported formats: JPG • JPEG • PNG</div>',
+    unsafe_allow_html=True
+)
+
+# -----------------------------
+# Banner
+# -----------------------------
+if uploaded_file is None:
+    st.markdown('<div class="banner">📷 Upload a food image using the sidebar to start food detection</div>', unsafe_allow_html=True)
+
+# -----------------------------
+# Calories
+# -----------------------------
+calorie_dict = {
+    "apple":95,
+    "banana":105,
+    "orange":62,
+    "pizza":285,
+    "burger":354
+}
+
+# -----------------------------
+# Load Model
+# -----------------------------
+@st.cache_resource
+def load_model():
+    return YOLO("best_new.pt")
+
+# -----------------------------
+# Main Logic
+# -----------------------------
 if uploaded_file is not None:
-    image = Image.open(uploaded_file).convert("RGB")
 
-    st.markdown("<br>", unsafe_allow_html=True)
+    st.subheader("🔍 Food Detection Results")
+
+    image = Image.open(uploaded_file).convert("RGB")
 
     col1, col2 = st.columns(2)
 
     with col1:
-        st.markdown('<div class="section-title">Uploaded Image</div>', unsafe_allow_html=True)
+        st.subheader("📷 Uploaded Image")
         st.image(image, use_container_width=True)
 
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as temp:
+        image.save(temp.name)
+        temp_path = temp.name
+
+    with st.spinner("⏳ Loading model..."):
+        model = load_model()
+
+    results = model(temp_path, conf=confidence)
+
+    annotated = results[0].plot()
+
     with col2:
-        st.markdown('<div class="section-title">Detection Preview</div>', unsafe_allow_html=True)
-        preview_placeholder = st.empty()
+        st.subheader("🎯 Detection Output")
+        st.image(annotated, channels="BGR", use_container_width=True)
 
-    st.markdown("<br>", unsafe_allow_html=True)
+    detections = []
+    names = model.names
 
-    if st.button("🔍 Predict Now"):
-        with st.spinner("Analyzing image and estimating calories..."):
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp_file:
-                temp_path = tmp_file.name
-                image.save(temp_path)
+    for r in results:
+        if r.boxes is None:
+            continue
 
-            try:
-                result_df, total_calories, annotated_image = run_prediction(temp_path)
+        cls_ids = r.boxes.cls.cpu().numpy().astype(int)
+        confs = r.boxes.conf.cpu().numpy()
 
-                with col2:
-                    if annotated_image is not None:
-                        preview_placeholder.image(annotated_image, channels="BGR", use_container_width=True)
-                    else:
-                        preview_placeholder.warning("No detections found.")
+        for c, conf_score in zip(cls_ids, confs):
+            detections.append({
+                "Food Item": names[c],
+                "Confidence": round(float(conf_score), 3)
+            })
 
-                st.markdown("<br>", unsafe_allow_html=True)
+    if len(detections) > 0:
 
-                metric_col1, metric_col2, metric_col3 = st.columns(3)
+        df = pd.DataFrame(detections)
 
-                with metric_col1:
-                    st.markdown(f"""
-                    <div class="metric-card">
-                        <div class="metric-value">{len(result_df)}</div>
-                        <div class="metric-label">Detected Items</div>
-                    </div>
-                    """, unsafe_allow_html=True)
+        st.subheader("🍎 Detected Food Items")
 
-                with metric_col2:
-                    total_weight = result_df["Weight (g)"].sum() if not result_df.empty else 0
-                    st.markdown(f"""
-                    <div class="metric-card">
-                        <div class="metric-value">{total_weight:.2f} g</div>
-                        <div class="metric-label">Estimated Total Weight</div>
-                    </div>
-                    """, unsafe_allow_html=True)
+        counts = df["Food Item"].value_counts()
 
-                with metric_col3:
-                    st.markdown(f"""
-                    <div class="metric-card">
-                        <div class="metric-value">{total_calories:.2f} kcal</div>
-                        <div class="metric-label">Total Calories</div>
-                    </div>
-                    """, unsafe_allow_html=True)
+        # ✅ FIXED: smaller + aligned grid
+        cols = st.columns(3)
+        i = 0
 
-                st.markdown("<br>", unsafe_allow_html=True)
-                st.markdown('<div class="section-title">Prediction Summary</div>', unsafe_allow_html=True)
+        for food, count in counts.items():
+            avg_conf = df[df["Food Item"] == food]["Confidence"].mean() * 100
 
-                if result_df.empty:
-                    st.warning("No valid food items were detected.")
-                else:
-                    st.dataframe(result_df, use_container_width=True, hide_index=True)
+            with cols[i % 3]:
+                st.markdown(f"""
+                <div class="card">
+                <b>{food.capitalize()}</b><br>
+                {count} item(s)<br>
+                {avg_conf:.1f}% confidence
+                </div>
+                """, unsafe_allow_html=True)
+            i += 1
 
-                    csv = result_df.to_csv(index=False).encode("utf-8")
-                    st.download_button(
-                        label="📥 Download Results CSV",
-                        data=csv,
-                        file_name="food_prediction_results.csv",
-                        mime="text/csv"
-                    )
+        # Nutrition Table
+        st.subheader("📊 Nutrition Table")
 
-            except Exception as e:
-                st.error(f"Prediction failed: {e}")
+        nutrition = []
+        total_calories = 0
 
-            finally:
-                if os.path.exists(temp_path):
-                    os.remove(temp_path)
+        for food, count in counts.items():
+            calories = calorie_dict.get(food, 50)
+            total = calories * count
+            total_calories += total
+
+            nutrition.append({
+                "Food Item": food,
+                "Count": count,
+                "Calories": total
+            })
+
+        nutrition_df = pd.DataFrame(nutrition)
+        st.dataframe(nutrition_df, use_container_width=True)
+
+        st.markdown(
+        f"<h2 style='color:#ff4b2b'>🔥 Total Estimated Calories: {total_calories} kcal</h2>",
+        unsafe_allow_html=True
+        )
+
+        # -----------------------------
+        # 🔥 UPDATED UNIQUE DONUT CHART
+        # -----------------------------
+        st.subheader("🥧 Calorie Distribution")
+
+        fig, ax = plt.subplots()
+
+        colors = plt.cm.Set3.colors
+
+        wedges, texts, autotexts = ax.pie(
+            nutrition_df["Calories"],
+            labels=nutrition_df["Food Item"],
+            autopct="%1.1f%%",
+            startangle=140,
+            colors=colors,
+            wedgeprops=dict(width=0.4)
+        )
+
+        # center circle
+        centre_circle = plt.Circle((0,0),0.60,fc='white')
+        fig.gca().add_artist(centre_circle)
+
+        # center text
+        ax.text(0, 0, f"{total_calories}\nkcal",
+                ha='center', va='center', fontsize=12, fontweight='bold')
+
+        ax.axis("equal")
+
+        st.pyplot(fig)
+
+    else:
+        st.warning("No food items detected.")
+
+    os.remove(temp_path)
+>>>>>>> 642697f647e180eca47ae1169fd71c3eb88dd6bf
