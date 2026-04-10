@@ -1,4 +1,0 @@
-S.No,Detected Food Item,Estimation Method,Estimated Weight (g),Estimated Calories (kcal)
-1,Potato,Regression,57.9,209.02
-2,Brinjal,Regression,50.33,12.58
-3,Banana,Regression,114.99,112.69
