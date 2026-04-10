@@ -1,16 +1,3 @@
-<<<<<<< HEAD
-gradio
-ultralytics
-joblib
-numpy
-pandas
-pillow
-matplotlib
-scikit-image
-opencv-python-headless
-xgboost
-scikit-learn
-=======
 streamlit==1.32.0
 ultralytics==8.0.196
 pandas==2.2.2
@@ -22,4 +9,3 @@ Pillow==10.3.0
 PyYAML==6.0.1
 scipy==1.11.4
 matplotlib==3.8.4
->>>>>>> 642697f647e180eca47ae1169fd71c3eb88dd6bf
