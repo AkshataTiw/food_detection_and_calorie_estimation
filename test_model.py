@@ -27,7 +27,7 @@ count_weight_dict = dict(zip(count_df["food"], count_df["weight_per_item"]))
 # =========================
 # INPUT IMAGE
 # =========================
-img_path = "test_images2/best10_actual259.6_p272.8.jpeg"
+img_path = "test_images2/best_image_1.jpeg"
 
 results = model_det(img_path, conf=0.25)
 
