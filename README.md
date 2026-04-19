@@ -8,4 +8,4 @@ app_file: app.py
 pinned: false
 ---
 
-# Food Detection and Calorie Estimation
+# Food Detection and Calorie Estimation logic
