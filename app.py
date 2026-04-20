@@ -1,82 +1,89 @@
 import os
 import warnings
 import tempfile
-import random
 
 import joblib
 import numpy as np
 import pandas as pd
-import gradio as gr
+import streamlit as st
 import matplotlib.pyplot as plt
-import torch
 
 from ultralytics import YOLO
 from skimage.measure import label, regionprops
+from PIL import Image
 
 warnings.filterwarnings("ignore")
 
-# =====================================================
-# DETERMINISM
-# =====================================================
-torch.manual_seed(42)
-np.random.seed(42)
-random.seed(42)
+# =========================
+# PAGE CONFIG
+# =========================
+st.set_page_config(page_title="Food AI", layout="wide")
 
-# =====================================================
-# MODEL CACHE
-# =====================================================
-model_cache = {}
+# =========================
+# CUSTOM CSS (PREMIUM UI)
+# =========================
+st.markdown("""
+<style>
+body {
+    background-color: #0f172a;
+}
+.block-container {
+    padding-top: 2rem;
+}
+.title {
+    text-align: center;
+    font-size: 42px;
+    font-weight: 800;
+    color: white;
+}
+.subtitle {
+    text-align: center;
+    color: #94a3b8;
+    margin-bottom: 30px;
+}
+.card {
+    background: rgba(255,255,255,0.05);
+    padding: 20px;
+    border-radius: 20px;
+    backdrop-filter: blur(10px);
+    text-align: center;
+}
+.metric {
+    font-size: 28px;
+    font-weight: bold;
+    color: #22c55e;
+}
+</style>
+""", unsafe_allow_html=True)
 
-def load_model(path):
-    if path not in model_cache:
-        model_cache[path] = joblib.load(path)
-    return model_cache[path]
+st.markdown("<div class='title'>🍽️ Food Detection and Calorie Estimation</div>", unsafe_allow_html=True)
+st.markdown("<div class='subtitle'>YOLO + Feature Engineering + ML</div>", unsafe_allow_html=True)
 
-# =====================================================
-# PATHS
-# =====================================================
-MODEL_PATH = "best_new.pt"
-CALIBRATION_PATH = "calibration.csv"
-NUTRITION_PATH = "nutrition.csv"
-COUNT_CONFIG_PATH = "count_based_config.csv"
-MODELS_DIR = "models"
+# =========================
+# LOAD MODELS
+# =========================
+@st.cache_resource
+def load_all():
+    model = YOLO("best_new.pt")
 
-# =====================================================
-# LOAD
-# =====================================================
-model_det = YOLO(MODEL_PATH)
+    calib = pd.read_csv("calibration.csv")
 
-calib_df = pd.read_csv(CALIBRATION_PATH)
-calib_df["food"] = calib_df["food"].str.lower().str.strip()
+    nutrition = pd.read_csv("nutrition.csv")
+    nutrition["food"] = nutrition["food"].str.lower().str.strip()
+    calorie_dict = dict(zip(nutrition["food"], nutrition["kcal_per_100g"]))
 
-nutrition_df = pd.read_csv(NUTRITION_PATH)
-nutrition_df["food"] = nutrition_df["food"].str.lower().str.strip()
+    count_df = pd.read_csv("count_based_config.csv")
+    count_df["food"] = count_df["food"].str.lower().str.strip()
+    count_dict = dict(zip(count_df["food"], count_df["weight_per_item"]))
 
-count_df = pd.read_csv(COUNT_CONFIG_PATH)
-count_df["food"] = count_df["food"].str.lower().str.strip()
+    return model, calib, calorie_dict, count_dict
 
-calorie_dict = dict(zip(nutrition_df["food"], nutrition_df["kcal_per_100g"]))
-count_weight_dict = dict(zip(count_df["food"], count_df["weight_per_item"]))
+model_det, calib_df, calorie_dict, count_weight_dict = load_all()
 
-# =====================================================
-# PIE CHART
-# =====================================================
-def create_pie_chart(df):
-    if df.empty:
-        return None
-    fig, ax = plt.subplots()
-    ax.pie(
-        df["Estimated Calories (kcal)"],
-        labels=df["Detected Food Item"],
-        autopct='%1.1f%%'
-    )
-    ax.set_title("Calorie Distribution")
-    return fig
-
-# =====================================================
+# =========================
 # FEATURE EXTRACTION
-# =====================================================
-def extract_features_from_mask(mask):
+# =========================
+def extract_features(mask):
     y_idx, x_idx = np.where(mask)
     if len(x_idx) == 0:
         return None
@@ -86,85 +93,47 @@ def extract_features_from_mask(mask):
     mask = mask[y_min:y_max+1, x_min:x_max+1]
 
     mask_area = np.sum(mask)
-    height, width = mask.shape
-    bbox_area = width * height
+    h, w = mask.shape
+    bbox_area = w * h
 
     labeled = label(mask)
     regions = regionprops(labeled)
-    if len(regions) == 0:
+    if not regions:
         return None
 
-    region = max(regions, key=lambda r: r.area)
+    r = max(regions, key=lambda x: x.area)
 
-    perimeter = region.perimeter
-    convex_area = region.convex_area
-    major_axis = region.major_axis_length
-    minor_axis = region.minor_axis_length
-
-    area_ratio = mask_area / (bbox_area + 1e-6)
-    aspect_ratio = width / (height + 1e-6)
-    solidity = mask_area / (convex_area + 1e-6)
-    eccentricity = region.eccentricity
-
-    equiv_diameter = np.sqrt(4 * mask_area / np.pi)
-    thickness = mask_area / (bbox_area + 1e-6)
-    volume_proxy = (equiv_diameter ** 2) * thickness
-
-    roundness = (4 * np.pi * mask_area) / (perimeter**2 + 1e-6)
-    compactness = (perimeter**2) / (mask_area + 1e-6)
-
-    elongation = major_axis / (minor_axis + 1e-6)
-    fill_ratio = mask_area / (convex_area + 1e-6)
+    perimeter = r.perimeter
+    convex_area = r.convex_area
 
     return {
-        "area_ratio": area_ratio,
-        "aspect_ratio": aspect_ratio,
-        "solidity": solidity,
-        "eccentricity": eccentricity,
-        "equiv_diameter": equiv_diameter,
-        "thickness": thickness,
-        "volume_proxy": volume_proxy,
-        "roundness": roundness,
-        "compactness": compactness,
-        "elongation": elongation,
-        "fill_ratio": fill_ratio
+        "area_ratio": mask_area / (bbox_area + 1e-6),
+        "aspect_ratio": w / (h + 1e-6),
+        "solidity": mask_area / (convex_area + 1e-6),
+        "eccentricity": r.eccentricity,
+        "equiv_diameter": np.sqrt(4 * mask_area / np.pi),
+        "thickness": mask_area / (bbox_area + 1e-6),
+        "volume_proxy": mask_area,
+        "roundness": (4 * np.pi * mask_area) / (perimeter**2 + 1e-6),
+        "compactness": (perimeter**2) / (mask_area + 1e-6),
+        "elongation": r.major_axis_length / (r.minor_axis_length + 1e-6),
+        "fill_ratio": mask_area / (convex_area + 1e-6)
     }
 
-# =====================================================
-# PREDICT WEIGHT
-# =====================================================
-def predict_weight(food, feat):
-    xgb = load_model(os.path.join(MODELS_DIR, f"xgb_{food}.pkl"))
-    rf = load_model(os.path.join(MODELS_DIR, f"rf_{food}.pkl"))
-    cols = load_model(os.path.join(MODELS_DIR, f"cols_{food}.pkl"))
+# =========================
+# PREDICTION
+# =========================
+def predict(image):
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+        image.save(tmp.name)
+        path = tmp.name
 
-    df = pd.DataFrame([feat])
-
-    for c in cols:
-        if c not in df.columns:
-            df[c] = 0
-
-    df = df[cols]
-
-    pred = 0.5*(np.exp(xgb.predict(df)[0]) - 1) + \
-           0.5*(np.exp(rf.predict(df)[0]) - 1)
-
-    row = calib_df[calib_df["food"] == food]
-    if not row.empty:
-        pred = row["a"].values[0] * pred + row["b"].values[0]
-
-    return max(pred, 0)
-
-# =====================================================
-# RUN PREDICTION
-# =====================================================
-def run_prediction(path):
     results = model_det(path, conf=0.25)
 
     rows = []
     total = 0
-    sn = 1
     count_items = {}
+    sn = 1
 
     annotated = results[0].plot()
 
@@ -183,130 +152,86 @@ def run_prediction(path):
                 continue
 
             mask = (masks[i] > 0.5).astype(np.uint8)
-
-            feat = extract_features_from_mask(mask)
+            feat = extract_features(mask)
             if feat is None:
                 continue
 
-            w = predict_weight(food, feat)
-            kcal = (w / 100) * calorie_dict.get(food, 0)
+            xgb = joblib.load(f"models/xgb_{food}.pkl")
+            rf = joblib.load(f"models/rf_{food}.pkl")
+            cols = joblib.load(f"models/cols_{food}.pkl")
 
+            df_feat = pd.DataFrame([feat])
+            for c in cols:
+                if c not in df_feat.columns:
+                    df_feat[c] = 0
+            df_feat = df_feat[cols]
+
+            pred = 0.5*(np.exp(xgb.predict(df_feat)[0]) - 1) + \
+                   0.5*(np.exp(rf.predict(df_feat)[0]) - 1)
+
+            row = calib_df[calib_df["food"] == food]
+            if not row.empty:
+                pred = row["a"].values[0]*pred + row["b"].values[0]
+
+            kcal = (pred/100) * calorie_dict.get(food, 0)
             total += kcal
 
-            rows.append({
-                "S.No": sn,
-                "Detected Food Item": food.title(),
-                "Estimated Weight (g)": round(w, 2),
-                "Estimated Calories (kcal)": round(kcal, 2)
-            })
+            rows.append([sn, food.title(), round(pred,2), round(kcal,2)])
             sn += 1
 
     for food, cnt in count_items.items():
         w = cnt * count_weight_dict[food]
-        kcal = (w / 100) * calorie_dict.get(food, 0)
-
+        kcal = (w/100) * calorie_dict.get(food,0)
         total += kcal
-
-        rows.append({
-            "S.No": sn,
-            "Detected Food Item": f"{food.title()} x {cnt}",
-            "Estimated Weight (g)": round(w, 2),
-            "Estimated Calories (kcal)": round(kcal, 2)
-        })
+        rows.append([sn, f"{food} x {cnt}", w, round(kcal,2)])
         sn += 1
-
-    return pd.DataFrame(rows), round(total, 2), annotated
-
-# =====================================================
-# CSV SAVE
-# =====================================================
-def save_csv(df):
-    path = os.path.join(tempfile.gettempdir(), "download_csv.csv")
-    df.to_csv(path, index=False)
-    return path
-
-# =====================================================
-# MAIN FUNCTION
-# =====================================================
-def predict_food(image):
-    if image is None:
-        return None, None, pd.DataFrame(), "Upload image", None, None
-
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-        path = tmp.name
-        image.save(path)
-
-    df, total, img = run_prediction(path)
-
-    if img is not None:
-        img = img[:, :, ::-1]
-
-    pie = create_pie_chart(df)
-    csv = save_csv(df)
 
     os.remove(path)
 
-    return image, img, df, f"<h2>Total Calories: {total} kcal</h2>", csv, pie
+    df = pd.DataFrame(rows, columns=["S.No","Food","Weight (g)","Calories"])
+    return df, total, annotated
 
-# =====================================================
+# =========================
 # UI
-# =====================================================
-with gr.Blocks(css="""
-.container {max-width: 1000px; margin: auto; text-align: center;}
-.title {
-    text-align: center;
-    font-size: 34px;
-    font-weight: 800;
-    margin-bottom: 5px;
-}
-.badge {
-    display: inline-block;
-    background: #111;
-    color: white;
-    padding: 6px 14px;
-    border-radius: 20px;
-    font-size: 12px;
-    margin-bottom: 20px;
-}
-.img-box img {
-    height: 280px !important;
-    object-fit: contain;
-}
-button {
-    width: 200px;
-    margin-top: 10px;
-}
-""") as demo:
+# =========================
+uploaded = st.file_uploader("Upload Image", type=["jpg","png","jpeg"])
 
-    gr.Markdown(
-        "<div class='title'>Food Detection and Calorie Estimation Using Deep Learning and Regression Models</div>"
-    )
+if uploaded:
+    image = Image.open(uploaded)
 
-    gr.Markdown(
-        "<div class='badge'>Powered by YOLO Detection</div>"
-    )
+    col1, col2 = st.columns(2)
 
-    with gr.Column(elem_classes="container"):
+    with col1:
+        st.image(image, caption="Uploaded")
 
-        img = gr.Image(type="pil", label="Upload Food Image")
-        btn = gr.Button("Analyze")
+    if st.button("🚀 Analyze"):
+        with st.spinner("Analyzing..."):
 
-        with gr.Row():
-            input_display = gr.Image(label="Uploaded Image", elem_classes="img-box")
-            out_img = gr.Image(label="Detected Image", elem_classes="img-box")
+            df, total, annotated = predict(image)
 
-        table = gr.Dataframe()
+            with col2:
+                st.image(annotated, caption="Detected")
 
-        total_html = gr.HTML()
+            st.markdown("<br>", unsafe_allow_html=True)
 
-        file = gr.File(label="Download CSV")
+            # TABLE
+            st.markdown("### 📊 Detailed Results")
+            st.dataframe(df, use_container_width=True)
 
-        pie_plot = gr.Plot()
+            # 🔥 TOTAL BELOW TABLE
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.markdown(
+                f"<div class='card'><div class='metric'>🔥 Total Calories: {round(total,2)} kcal</div></div>",
+                unsafe_allow_html=True
+            )
 
-    btn.click(
-        predict_food,
-        img,
-        [input_display, out_img, table, total_html, file, pie_plot]
-    )
+            # PIE CHART
+            if not df.empty:
+                fig, ax = plt.subplots()
+                ax.pie(df["Calories"], labels=df["Food"], autopct="%1.1f%%")
+                ax.set_title("Calorie Split")
+                st.pyplot(fig)
 
-demo.launch()
+            # DOWNLOAD CSV
+            csv = df.to_csv(index=False).encode()
+            st.download_button("📥 Download CSV", csv, "results.csv", "text/csv")
