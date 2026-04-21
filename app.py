@@ -2,6 +2,10 @@ import os
 import warnings
 import tempfile
 
+# 🔥 FIX: prevent OpenCV GUI issues
+os.environ["OPENCV_VIDEOIO_PRIORITY_MSMF"] = "0"
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
+
 import joblib
 import numpy as np
 import pandas as pd
@@ -33,7 +37,11 @@ st.markdown("<h1 style='text-align:center;'>🍽️ NutriLens</h1>", unsafe_allo
 # =========================
 @st.cache_resource
 def load_all():
-    model = YOLO("best_new.pt")
+    try:
+        model = YOLO("best_new.pt")
+    except Exception as e:
+        st.error(f"❌ Model load failed: {e}")
+        st.stop()
 
     calib_df = pd.read_csv("calibration.csv")
 
@@ -65,7 +73,8 @@ def predict(image):
     count = 1
     count_items = {}
 
-    annotated = results[0].plot()
+    # 🔥 FIX: use PIL instead of OpenCV
+    annotated = results[0].plot(pil=True)
 
     for r in results:
         if r.masks is None:
@@ -109,9 +118,6 @@ def predict(image):
                 count_items[food] = count_items.get(food, 0) + 1
                 continue
 
-            # =========================
-            # 🔥 FIXED MODEL LOADING
-            # =========================
             base_path = os.path.join(os.getcwd(), "models")
 
             xgb_path = os.path.join(base_path, f"xgb_{food}.pkl")
