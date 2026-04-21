@@ -1,11 +1,10 @@
 streamlit
 ultralytics
-torch
-numpy
 pandas
+numpy
 matplotlib
 scikit-image
 joblib
-scikit-learn
-xgboost
-Pillow
+pillow
+qrcode
+opencv-python-headless
