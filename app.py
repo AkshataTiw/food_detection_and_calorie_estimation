@@ -32,7 +32,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown("<div class='title'>🍽️ Food Detection & Calorie Estimation</div>", unsafe_allow_html=True)
+st.markdown("<div class='title'>NutriLens 🍽️", unsafe_allow_html=True)
 
 # =========================
 # LOAD MODELS (UNCHANGED)
