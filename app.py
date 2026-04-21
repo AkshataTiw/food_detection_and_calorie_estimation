@@ -14,31 +14,26 @@ from PIL import Image
 warnings.filterwarnings("ignore")
 
 # =========================
-# SAFE YOLO IMPORT (🔥 FIX)
+# SAFE YOLO IMPORT
 # =========================
 try:
     from ultralytics import YOLO
 except Exception as e:
-    st.error("❌ YOLO failed to load. Check dependencies.")
+    st.error(f"❌ YOLO failed: {e}")
     st.stop()
 
 # =========================
 # PAGE CONFIG
 # =========================
 st.set_page_config(page_title="NutriLens 🍽️", layout="wide")
-
 st.markdown("<h1 style='text-align:center;'>🍽️ NutriLens</h1>", unsafe_allow_html=True)
 
 # =========================
-# LOAD MODELS (SAFE)
+# LOAD MODELS
 # =========================
 @st.cache_resource
 def load_all():
-    try:
-        model = YOLO("best_new.pt")
-    except:
-        st.error("❌ Model file not found or failed to load")
-        st.stop()
+    model = YOLO("best_new.pt")
 
     calib_df = pd.read_csv("calibration.csv")
 
@@ -109,18 +104,33 @@ def predict(image):
 
             food = model_det.names[int(classes[i])].lower().strip()
 
+            # COUNT BASED
             if food in count_weight_dict:
                 count_items[food] = count_items.get(food, 0) + 1
                 continue
 
-            # 🔥 SAFE MODEL LOAD
-            try:
-                xgb = joblib.load(f"models/xgb_{food}.pkl")
-                rf = joblib.load(f"models/rf_{food}.pkl")
-                cols = joblib.load(f"models/cols_{food}.pkl")
-            except:
+            # =========================
+            # 🔥 FIXED MODEL LOADING
+            # =========================
+            base_path = os.path.join(os.getcwd(), "models")
+
+            xgb_path = os.path.join(base_path, f"xgb_{food}.pkl")
+            rf_path = os.path.join(base_path, f"rf_{food}.pkl")
+            cols_path = os.path.join(base_path, f"cols_{food}.pkl")
+
+            if not os.path.exists(xgb_path):
+                st.warning(f"⚠️ Model missing for: {food}")
                 continue
 
+            try:
+                xgb = joblib.load(xgb_path)
+                rf = joblib.load(rf_path)
+                cols = joblib.load(cols_path)
+            except Exception as e:
+                st.error(f"❌ Failed loading {food}: {e}")
+                continue
+
+            # FEATURES
             area_ratio = mask_area / (bbox_area + 1e-6)
             aspect_ratio = width / (height + 1e-6)
             solidity = mask_area / (convex_area + 1e-6)
@@ -164,6 +174,7 @@ def predict(image):
             rows.append([count, food.title(), round(pred,2), round(kcal,2)])
             count += 1
 
+    # COUNT ITEMS
     for food, cnt in count_items.items():
         weight_per_item = count_weight_dict[food]
         total_weight = cnt * weight_per_item
@@ -190,6 +201,7 @@ if uploaded:
 
     with col1:
         st.image(image, caption="Uploaded Image", width=500)
+
     if st.button("🚀 Analyze"):
         with st.spinner("Analyzing..."):
 
