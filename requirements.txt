@@ -1,5 +1,8 @@
 streamlit
-ultralytics
+ultralytics==8.0.20
+opencv-python-headless==4.8.0.76
+torch
+torchvision
 pandas
 numpy
 matplotlib
@@ -7,4 +10,3 @@ scikit-image
 joblib
 pillow
 qrcode
-opencv-python-headless
