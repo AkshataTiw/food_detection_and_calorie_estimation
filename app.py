@@ -14,6 +14,15 @@ from PIL import Image
 warnings.filterwarnings("ignore")
 
 # =========================
+# SAFE YOLO IMPORT (🔥 FIX)
+# =========================
+try:
+    from ultralytics import YOLO
+except Exception as e:
+    st.error("❌ YOLO failed to load. Check dependencies.")
+    st.stop()
+
+# =========================
 # PAGE CONFIG
 # =========================
 st.set_page_config(page_title="NutriLens 🍽️", layout="wide")
@@ -21,31 +30,25 @@ st.set_page_config(page_title="NutriLens 🍽️", layout="wide")
 st.markdown("<h1 style='text-align:center;'>🍽️ NutriLens</h1>", unsafe_allow_html=True)
 
 # =========================
-# LOAD MODELS
+# LOAD MODELS (SAFE)
 # =========================
 @st.cache_resource
 def load_all():
     try:
-        from ultralytics import YOLO
         model = YOLO("best_new.pt")
-    except Exception as e:
-        st.error(f"❌ YOLO failed to load: {e}")
+    except:
+        st.error("❌ Model file not found or failed to load")
         st.stop()
 
-    try:
-        calib_df = pd.read_csv("calibration.csv")
+    calib_df = pd.read_csv("calibration.csv")
 
-        nutrition_df = pd.read_csv("nutrition.csv")
-        nutrition_df["food"] = nutrition_df["food"].str.lower().str.strip()
-        calorie_dict = dict(zip(nutrition_df["food"], nutrition_df["kcal_per_100g"]))
+    nutrition_df = pd.read_csv("nutrition.csv")
+    nutrition_df["food"] = nutrition_df["food"].str.lower().str.strip()
+    calorie_dict = dict(zip(nutrition_df["food"], nutrition_df["kcal_per_100g"]))
 
-        count_df = pd.read_csv("count_based_config.csv")
-        count_df["food"] = count_df["food"].str.lower().str.strip()
-        count_weight_dict = dict(zip(count_df["food"], count_df["weight_per_item"]))
-
-    except Exception as e:
-        st.error(f"❌ CSV load failed: {e}")
-        st.stop()
+    count_df = pd.read_csv("count_based_config.csv")
+    count_df["food"] = count_df["food"].str.lower().str.strip()
+    count_weight_dict = dict(zip(count_df["food"], count_df["weight_per_item"]))
 
     return model, calib_df, calorie_dict, count_weight_dict
 
@@ -106,12 +109,11 @@ def predict(image):
 
             food = model_det.names[int(classes[i])].lower().strip()
 
-            # COUNT BASED
             if food in count_weight_dict:
                 count_items[food] = count_items.get(food, 0) + 1
                 continue
 
-            # SAFE MODEL LOAD
+            # 🔥 SAFE MODEL LOAD
             try:
                 xgb = joblib.load(f"models/xgb_{food}.pkl")
                 rf = joblib.load(f"models/rf_{food}.pkl")
@@ -119,7 +121,6 @@ def predict(image):
             except:
                 continue
 
-            # FEATURES
             area_ratio = mask_area / (bbox_area + 1e-6)
             aspect_ratio = width / (height + 1e-6)
             solidity = mask_area / (convex_area + 1e-6)
@@ -163,7 +164,6 @@ def predict(image):
             rows.append([count, food.title(), round(pred,2), round(kcal,2)])
             count += 1
 
-    # COUNT ITEMS
     for food, cnt in count_items.items():
         weight_per_item = count_weight_dict[food]
         total_weight = cnt * weight_per_item
