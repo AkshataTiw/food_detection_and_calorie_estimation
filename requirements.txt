@@ -1,8 +1,8 @@
-streamlit
-ultralytics==8.0.20
-opencv-python-headless==4.8.0.76
-torch
-torchvision
+streamlit==1.32.0
+ultralytics==8.2.0
+opencv-python-headless==4.9.0.80
+torch==2.2.0
+torchvision==0.17.0
 pandas
 numpy
 matplotlib

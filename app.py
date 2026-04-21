@@ -8,38 +8,37 @@ import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
 
-from ultralytics import YOLO
 from skimage.measure import label, regionprops
 from PIL import Image
 
 warnings.filterwarnings("ignore")
 
 # =========================
+# SAFE YOLO IMPORT (🔥 FIX)
+# =========================
+try:
+    from ultralytics import YOLO
+except Exception as e:
+    st.error("❌ YOLO failed to load. Check dependencies.")
+    st.stop()
+
+# =========================
 # PAGE CONFIG
 # =========================
-st.set_page_config(page_title="Food AI", layout="wide")
+st.set_page_config(page_title="NutriLens 🍽️", layout="wide")
+
+st.markdown("<h1 style='text-align:center;'>🍽️ NutriLens</h1>", unsafe_allow_html=True)
 
 # =========================
-# UI
-# =========================
-st.markdown("""
-<style>
-.title {
-    text-align: center;
-    font-size: 42px;
-    font-weight: 800;
-}
-</style>
-""", unsafe_allow_html=True)
-
-st.markdown("<div class='title'>NutriLens 🍽️", unsafe_allow_html=True)
-
-# =========================
-# LOAD MODELS (UNCHANGED)
+# LOAD MODELS (SAFE)
 # =========================
 @st.cache_resource
 def load_all():
-    model = YOLO("best_new.pt")
+    try:
+        model = YOLO("best_new.pt")
+    except:
+        st.error("❌ Model file not found or failed to load")
+        st.stop()
 
     calib_df = pd.read_csv("calibration.csv")
 
@@ -56,7 +55,7 @@ def load_all():
 model_det, calib_df, calorie_dict, count_weight_dict = load_all()
 
 # =========================
-# PREDICTION (🔥 EXACT TERMINAL LOGIC)
+# PREDICTION
 # =========================
 def predict(image):
 
@@ -104,29 +103,24 @@ def predict(image):
             region = max(regions, key=lambda r: r.area)
 
             perimeter = region.perimeter
-            convex_area = region.area_convex   # ✅ SAME AS TERMINAL
+            convex_area = region.area_convex
             major_axis = region.axis_major_length
             minor_axis = region.axis_minor_length
 
             food = model_det.names[int(classes[i])].lower().strip()
 
-            # =========================
-            # COUNT BASED
-            # =========================
             if food in count_weight_dict:
                 count_items[food] = count_items.get(food, 0) + 1
                 continue
 
-            # =========================
-            # LOAD MODELS
-            # =========================
-            xgb = joblib.load(f"models/xgb_{food}.pkl")
-            rf = joblib.load(f"models/rf_{food}.pkl")
-            cols = joblib.load(f"models/cols_{food}.pkl")
+            # 🔥 SAFE MODEL LOAD
+            try:
+                xgb = joblib.load(f"models/xgb_{food}.pkl")
+                rf = joblib.load(f"models/rf_{food}.pkl")
+                cols = joblib.load(f"models/cols_{food}.pkl")
+            except:
+                continue
 
-            # =========================
-            # FEATURES (🔥 EXACT SAME)
-            # =========================
             area_ratio = mask_area / (bbox_area + 1e-6)
             aspect_ratio = width / (height + 1e-6)
             solidity = mask_area / (convex_area + 1e-6)
@@ -134,8 +128,6 @@ def predict(image):
 
             equiv_diameter = np.sqrt(4 * mask_area / np.pi)
             thickness = mask_area / (bbox_area + 1e-6)
-
-            # ✅ IMPORTANT FIX (YOU CHANGED THIS BEFORE)
             volume_proxy = (equiv_diameter ** 2) * thickness
 
             roundness = (4 * np.pi * mask_area) / (perimeter**2 + 1e-6)
@@ -158,15 +150,10 @@ def predict(image):
                 "fill_ratio": fill_ratio
             }])[cols]
 
-            # =========================
-            # PREDICTION
-            # =========================
             pred_xgb = np.exp(xgb.predict(features)[0]) - 1
             pred_rf = np.exp(rf.predict(features)[0]) - 1
-
             pred = 0.5 * pred_xgb + 0.5 * pred_rf
 
-            # CALIBRATION
             row = calib_df[calib_df["food"] == food]
             if len(row) > 0:
                 pred = row["a"].values[0] * pred + row["b"].values[0]
@@ -177,17 +164,12 @@ def predict(image):
             rows.append([count, food.title(), round(pred,2), round(kcal,2)])
             count += 1
 
-    # =========================
-    # COUNT ITEMS
-    # =========================
     for food, cnt in count_items.items():
         weight_per_item = count_weight_dict[food]
-
         total_weight = cnt * weight_per_item
         kcal = (total_weight / 100) * calorie_dict.get(food, 0)
 
         total_calories += kcal
-
         rows.append([count, f"{food} x {cnt}", round(total_weight,2), round(kcal,2)])
         count += 1
 
@@ -197,7 +179,7 @@ def predict(image):
     return df, total_calories, annotated
 
 # =========================
-# UI FLOW
+# UI
 # =========================
 uploaded = st.file_uploader("Upload Image", type=["jpg","png","jpeg"])
 
@@ -207,7 +189,7 @@ if uploaded:
     col1, col2 = st.columns(2)
 
     with col1:
-        st.image(image, caption="Uploaded Image")
+        st.image(image, caption="Uploaded Image", width="stretch")
 
     if st.button("🚀 Analyze"):
         with st.spinner("Analyzing..."):
@@ -215,14 +197,14 @@ if uploaded:
             df, total, annotated = predict(image)
 
             with col2:
-                st.image(annotated, caption="Detected")
+                st.image(annotated, caption="Detected", width="stretch")
 
             st.markdown("### 📊 Results")
-            st.dataframe(df, use_container_width=True)
+            st.dataframe(df)
 
             st.markdown(f"## 🔥 Total Calories: {round(total,2)} kcal")
 
-            if not df.empty:
+            if not df.empty and df["Calories"].sum() > 0:
                 fig, ax = plt.subplots()
                 ax.pie(df["Calories"], labels=df["Food"], autopct="%1.1f%%")
                 st.pyplot(fig)
